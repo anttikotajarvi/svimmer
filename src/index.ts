@@ -22,9 +22,28 @@ import {
   walkBranches,
   type BranchSlot,
 } from "./core/branch-struct";
+import { selector } from "./helpers/selectors";
+/**
+ * Selectors work as accessors but not vice-versa.
+ * Can be passed into the {@link SvimmerReader.focus | focus} and {@link SvimmerReader.read | read} methods.
+ * - Use {@link selector} to create selectors
+ */
+export interface Selector<T, U> extends Accessor<T, U> {
+  readonly [SelectorBrand]: true;
+}
+declare const SelectorBrand: unique symbol;
 
+/**
+ * Accessors can only be used with the read method.
+ * Use accessors to read and transform data.
+ * - Can be with the {@link SvimmerReader.read | read} method.
+ */
 export type Accessor<T, U> = (x: Immutable<T>) => U;
-export type Selector<T, U> = (x: T) => U;
+
+/**
+ * Transactors are for mutating draft functions.
+ * Can be passed into the {@link SvimmerWriter.transact | transact} method.
+ */
 export type Transactor<T, R> = (draft: Draft<T>) => R;
 
 export type Unsubscriber = () => void;
@@ -40,6 +59,7 @@ export interface SvimmerReader<T> {
    * - Stale references
    * - Unexplainably not stale references
    * - Bad design
+   *
    * Should probably be only used for:
    * - Creating a deep clone
    * - Serializing right away
@@ -229,7 +249,7 @@ const resolveFocusPath = <T, U>(
 ): Path | null => {
   const data = ctx.getData();
   const proxy = createTrackerProxy(data);
-  const tracked = selector(proxy as T);
+  const tracked = selector(proxy as Immutable<T>);
   const subPath = extractPath(tracked as unknown);
 
   const res = resolvePath(data, subPath);
