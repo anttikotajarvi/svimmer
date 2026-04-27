@@ -11,9 +11,9 @@ import {
 enablePatches();
 enableMapSet();
 
-import { createTrackerProxy } from "./sys/tracker";
-import { extractPath } from "./sys/proxy";
-import { resolvePath, type Path } from "./sys/path";
+import { createTrackerProxy } from "./core/tracker";
+import { extractPath } from "./core/proxy";
+import { resolvePath, type Path } from "./core/path";
 import {
   buildDeletedChildren,
   createBranchSlot,
@@ -21,7 +21,7 @@ import {
   ensureBranch,
   walkBranches,
   type BranchSlot,
-} from "./sys/branch-struct";
+} from "./core/branch-struct";
 
 export type Accessor<T, U> = (x: Immutable<T>) => U;
 export type Selector<T, U> = (x: T) => U;

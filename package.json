@@ -1,17 +1,41 @@
 {
   "name": "svimmer",
-  "module": "index.ts",
   "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./helpers/accessors": {
+      "types": "./dist/helpers/accessors.d.ts",
+      "default": "./dist/helpers/accessors.js"
+    }
+  },
   "scripts": {
-    "build": "tsup"
+    "build": "zshy",
+    "dev": "zshy --watch",
+    "prepack": "zshy"
+  },
+  "zshy": {
+    "cjs": false,
+    "exports": {
+      ".": "./src/index.ts",
+      "./helpers/accessors": "./src/helpers/accessors.ts"
+    }
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "zshy": "^0.7.0"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
     "immer": "^11.1.4"
-  }
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts"
 }
