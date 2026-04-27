@@ -1,6 +1,4 @@
-import type { Immutable } from "immer";
-
-type Accessor<T, U> = (x: Immutable<T>) => U;
+import type { Accessor } from "..";
 
 export const id =
   <T>(): Accessor<T, T> =>

@@ -16,9 +16,9 @@ import {
   type BranchSlot,
 } from "./branch-struct";
 
-type Accessor<T, U> = (x: Immutable<T>) => U;
-type Selector<T, U> = (x: T) => U;
-type Transactor<T, R> = (draft: Draft<T>) => R;
+export type Accessor<T, U> = (x: Immutable<T>) => U;
+export type Selector<T, U> = (x: T) => U;
+export type Transactor<T, R> = (draft: Draft<T>) => R;
 
 export interface SvimmerReader<T> {
   read<U>(accessor: Accessor<T, U>): U;
