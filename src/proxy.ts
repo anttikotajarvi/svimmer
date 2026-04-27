@@ -1,4 +1,4 @@
-import { symTrackerDetails } from "../svelte-immer-store/src/proxy/tracker";
+import { symTrackerDetails } from "./tracker";
 import type { Path } from "./path";
 export function extractPath(tracked: any): Path {
   const path: Path = [];
