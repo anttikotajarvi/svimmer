@@ -9,7 +9,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "immer": "^11.1.4",
-    "svelte": "^5.55.4"
+    "immer": "^11.1.4"
   }
 }
