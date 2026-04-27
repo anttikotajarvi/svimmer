@@ -1,9 +1,16 @@
 import {
+  enableMapSet,
+  enablePatches,
   produceWithPatches,
   type Draft,
   type Immutable,
   type Patch,
 } from "immer";
+
+// Both are necessary
+enablePatches();
+enableMapSet();
+
 import { createTrackerProxy } from "./tracker";
 import { extractPath } from "./proxy";
 import { resolvePath, type Path } from "./path";
@@ -19,6 +26,9 @@ import {
 export type Accessor<T, U> = (x: Immutable<T>) => U;
 export type Selector<T, U> = (x: T) => U;
 export type Transactor<T, R> = (draft: Draft<T>) => R;
+
+export type Unsubscriber = () => void;
+export type Subscriber<T> = (value: Immutable<T>) => void;
 
 export interface SvimmerReader<T> {
   read<U>(accessor: Accessor<T, U>): U;
@@ -48,27 +58,8 @@ interface StoreCtx<T> {
   subscribe: (run: Subscriber<SvimmerReader<T>>) => Unsubscriber;
   onDestroy: (cb: () => void) => Unsubscriber;
 }
-const makeRead =
-  <T>(ctx: StoreCtx<T>) =>
-  <U>(accessor: Accessor<T, U>) =>
-    accessor(ctx.getData());
 
-const resolveFocusPath = <T, U>(
-  ctx: StoreCtx<T>,
-  selector: Selector<T, U>,
-): Path | null => {
-  const data = ctx.getData();
-  const proxy = createTrackerProxy(data);
-  const tracked = selector(proxy as T);
-  const subPath = extractPath(tracked as unknown);
-
-  const res = resolvePath(data, subPath);
-  if (!res.ok) return null;
-
-  return subPath;
-};
-
-function createSvimmerStore<T>(initial: T) {
+export function createSvimmerStore<T>(initial: T) {
   let state = initial;
 
   const branches = createBranchSlot(null, null);
@@ -174,7 +165,6 @@ function createSvimmerStore<T>(initial: T) {
         },
         subscribe: ctx.subscribe,
         onDestroy: ctx.onDestroy,
-
         value: ctx.getData,
       };
     }
@@ -228,6 +218,22 @@ function createSvimmerStore<T>(initial: T) {
   return getOrCreateWriter<T>([]);
 }
 
-export type Unsubscriber = () => void;
-export type Subscriber<T> = (value: Immutable<T>) => void;
+const makeRead =
+  <T>(ctx: StoreCtx<T>) =>
+  <U>(accessor: Accessor<T, U>) =>
+    accessor(ctx.getData());
 
+const resolveFocusPath = <T, U>(
+  ctx: StoreCtx<T>,
+  selector: Selector<T, U>,
+): Path | null => {
+  const data = ctx.getData();
+  const proxy = createTrackerProxy(data);
+  const tracked = selector(proxy as T);
+  const subPath = extractPath(tracked as unknown);
+
+  const res = resolvePath(data, subPath);
+  if (!res.ok) return null;
+
+  return subPath;
+};
