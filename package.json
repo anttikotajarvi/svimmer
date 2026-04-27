@@ -10,6 +10,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./helpers/selectors": {
+      "types": "./dist/helpers/selectors.d.ts",
+      "default": "./dist/helpers/selectors.js"
+    },
     "./helpers/accessors": {
       "types": "./dist/helpers/accessors.d.ts",
       "default": "./dist/helpers/accessors.js"
@@ -24,6 +28,7 @@
     "cjs": false,
     "exports": {
       ".": "./src/index.ts",
+      "./helpers/selectors": "./src/helpers/selectors.ts",
       "./helpers/accessors": "./src/helpers/accessors.ts"
     }
   },

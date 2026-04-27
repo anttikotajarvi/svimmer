@@ -192,9 +192,7 @@ export function createSvimmerStore<T>(initial: T) {
     return branch.reader as SvimmerReader<T>;
   }
 
-  /**
-   * Just a thin per-path facade.
-   */
+  // Just a thin per-path facade.
   const getCtx = <T>(path: Path): StoreCtx<T> => {
     const getData = () => {
       // TODO: This reference needs to be cached in the future for sure.
@@ -215,7 +213,6 @@ export function createSvimmerStore<T>(initial: T) {
           if (!res.ok) {
             throw new Error("transact: Failed to resolve path", { cause: res });
           }
-
           return fn(res.value as any);
         });
       },

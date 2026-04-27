@@ -7,46 +7,6 @@ export type Step = string | number | symbol
 
 export type Path = Step[];
 
-export function ensurePath(data: unknown, path: Path): boolean {
-  let cur: unknown = data;
-
-  for (const step of path) {
-    if (cur == null) return false;
-
-    // Map
-    if (cur instanceof Map) {
-      if (!cur.has(step)) return false;
-      cur = cur.get(step);
-      continue;
-    }
-
-    // Set is terminal for now
-    if (cur instanceof Set) {
-      return false;
-    }
-
-    // Array
-    if (Array.isArray(cur)) {
-      if (typeof step !== "number") return false;
-      if (!(step in cur)) return false;
-      cur = cur[step];
-      continue;
-    }
-
-    // Object / function object
-    if (typeof cur === "object" || typeof cur === "function") {
-      const obj = cur as Record<string | number | symbol, unknown>;
-      if (!Object.prototype.hasOwnProperty.call(obj, step)) return false;
-      cur = obj[step];
-      continue;
-    }
-
-    return false;
-  }
-
-  return true;
-}
-
 export type ResolvePathResult<T = unknown> =
   | {
       ok: true;
