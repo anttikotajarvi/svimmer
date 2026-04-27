@@ -11,9 +11,9 @@ import {
 enablePatches();
 enableMapSet();
 
-import { createTrackerProxy } from "./tracker";
-import { extractPath } from "./proxy";
-import { resolvePath, type Path } from "./path";
+import { createTrackerProxy } from "./sys/tracker";
+import { extractPath } from "./sys/proxy";
+import { resolvePath, type Path } from "./sys/path";
 import {
   buildDeletedChildren,
   createBranchSlot,
@@ -21,7 +21,7 @@ import {
   ensureBranch,
   walkBranches,
   type BranchSlot,
-} from "./branch-struct";
+} from "./sys/branch-struct";
 
 export type Accessor<T, U> = (x: Immutable<T>) => U;
 export type Selector<T, U> = (x: T) => U;
@@ -178,7 +178,7 @@ export function createSvimmerStore<T>(initial: T) {
   const getCtx = <T>(path: Path): StoreCtx<T> => {
     const getData = () => {
       // TODO: This reference needs to be cached in the future for sure.
-      //       Currently this resolution is done on ever .read call.
+      //       Currently this resolution is done on every read call.
       const res = resolvePath(state, path);
       if (!res.ok)
         throw new Error("getData: Failed to resolve path", { cause: res });
@@ -191,7 +191,7 @@ export function createSvimmerStore<T>(initial: T) {
         return rootTransact((draft) => {
           let res = resolvePath(draft, path);
           /* When this is invoked in createNode 
-                the target path should already be ensured! */
+              the target path should already be ensured! */
           if (!res.ok) {
             throw new Error("transact: Failed to resolve path", { cause: res });
           }
