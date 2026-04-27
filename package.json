@@ -2,6 +2,9 @@
   "name": "svimmer",
   "module": "index.ts",
   "type": "module",
+  "scripts": {
+    "build": "tsup"
+  },
   "devDependencies": {
     "@types/bun": "latest"
   },
