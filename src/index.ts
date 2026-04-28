@@ -84,6 +84,9 @@ interface StoreCtx<T> {
   onDestroy: (cb: () => void) => Unsubscriber;
 }
 
+// -----------------------------------------------------------
+// Implementation
+// -----------------------------------------------------------
 export function createSvimmerStore<T>(initial: T) {
   let state = initial;
 
@@ -100,7 +103,7 @@ export function createSvimmerStore<T>(initial: T) {
   );
 
   // -----------------------------------------------------------
-  // Implementation
+  // Internals
   // -----------------------------------------------------------
   function notify(patches: Patch[], inversePatches: Patch[]) {
     /* Accumulate effects of patches */
@@ -160,17 +163,14 @@ export function createSvimmerStore<T>(initial: T) {
 
   function rootTransact<R>(fn: Transactor<T, R>) {
     let result!: R;
-
     const [newState, patches, inversePatches] = produceWithPatches(
       state,
       (draft) => {
         result = fn(draft);
       },
     );
-
     state = newState;
     if (patches.length !== 0) notify(patches, inversePatches);
-
     return result;
   }
 
@@ -181,13 +181,16 @@ export function createSvimmerStore<T>(initial: T) {
         return value as any;
       },
     );
-
     state = newState;
     if (patches.length !== 0) notify(patches, inversePatches);
   }
 
+  // -------------------------------------------------------------
+  // Interface
+  // -------------------------------------------------------------
+
   // Just a thin per-path facade.
-  const getCtx = <X>(path: Path): StoreCtx<X> => {
+  function getCtx<X>(path: Path): StoreCtx<X> {
     const getData = () => {
       // TODO: This reference needs to be cached in the future for sure.
       //       Currently this resolution is done on every read call.
@@ -196,6 +199,7 @@ export function createSvimmerStore<T>(initial: T) {
         throw new Error("getData: Failed to resolve path", { cause: res });
       return res.value as Immutable<X>;
     };
+
     /**
      * This replaces through the parent, so it will
      *  not work for the root.
@@ -216,71 +220,78 @@ export function createSvimmerStore<T>(initial: T) {
       });
     };
     const setData = isRootPath(path) ? (rootSet as any) : nonRootSetData;
+
+    const transact: StoreCtx<X>["transact"] = (fn) =>
+      rootTransact((draft) => {
+        let res = resolvePath(draft, path);
+        /* When this is invoked in createNode 
+              the target path should already be ensured! */
+        if (!res.ok) {
+          throw new Error("transact: Failed to resolve path", { cause: res });
+        }
+        return fn(res.value as any);
+      });
+
+    const subscribe: StoreCtx<X>["subscribe"] = (fn) => {
+      const branch = ensureBranch(branches, path);
+      branch.subs.add(fn as Subscriber<unknown>);
+      const reader = getOrCreateReader<X>(path);
+      fn(reader);
+      return () => branch.subs.delete(fn as Subscriber<unknown>);
+    };
+
+    const onDestroy: StoreCtx<X>["onDestroy"] = (fn) => {
+      const branch = ensureBranch(branches, path);
+      branch.onDestroy.add(fn);
+      return () => branch.onDestroy.delete(fn);
+    };
+
     return {
       getData,
       setData,
-      transact: (fn) => {
-        return rootTransact((draft) => {
-          let res = resolvePath(draft, path);
-          /* When this is invoked in createNode 
-              the target path should already be ensured! */
-          if (!res.ok) {
-            throw new Error("transact: Failed to resolve path", { cause: res });
-          }
-          return fn(res.value as any);
-        });
-      },
-
-      subscribe: (fn) => {
-        const branch = ensureBranch(branches, path);
-        branch.subs.add(fn as Subscriber<unknown>);
-        const reader = getOrCreateReader<X>(path);
-        fn(reader);
-        return () => branch.subs.delete(fn as Subscriber<unknown>);
-      },
-      onDestroy: (fn) => {
-        const branch = ensureBranch(branches, path);
-        branch.onDestroy.add(fn);
-        return () => branch.onDestroy.delete(fn);
-      },
+      transact,
+      subscribe,
+      onDestroy,
     };
-  };
+  }
 
   function getOrCreateWriter<T>(path: Path): SvimmerWriter<T> {
     const branch = ensureBranch(branches, path);
-    if (!branch.writer) {
-      const ctx = getCtx<T>(path);
-      branch.writer = {
-        transact: ctx.transact,
-        read: makeRead(ctx),
-        focus: <U>(selector: Selector<T, U>): SvimmerWriter<U> | null => {
-          const subPath = resolveFocusPath(ctx, selector);
-          return subPath ? getOrCreateWriter<U>([...path, ...subPath]) : null;
-        },
-        subscribe: ctx.subscribe,
-        onDestroy: ctx.onDestroy,
-        value: ctx.getData,
-        set: ctx.setData,
-      };
-    }
+    if (branch.writer) return branch.writer;
+
+    /* Create and cache writer */
+    const ctx = getCtx<T>(path);
+    branch.writer = {
+      transact: ctx.transact,
+      read: makeRead(ctx),
+      focus: <U>(selector: Selector<T, U>): SvimmerWriter<U> | null => {
+        const subPath = resolveFocusPath(ctx, selector);
+        return subPath ? getOrCreateWriter<U>([...path, ...subPath]) : null;
+      },
+      subscribe: ctx.subscribe,
+      onDestroy: ctx.onDestroy,
+      value: ctx.getData,
+      set: ctx.setData,
+    };
     return branch.writer as SvimmerWriter<T>;
   }
 
   function getOrCreateReader<T>(path: Path) {
     const branch = ensureBranch(branches, path);
-    if (!branch.reader) {
-      const ctx = getCtx<T>(path);
-      branch.reader = {
-        read: makeRead(ctx),
-        focus: <U>(selector: Selector<T, U>): SvimmerReader<U> | null => {
-          const subPath = resolveFocusPath(ctx, selector);
-          return subPath ? getOrCreateReader<U>([...path, ...subPath]) : null;
-        },
-        subscribe: ctx.subscribe,
-        onDestroy: ctx.onDestroy,
-        value: ctx.getData,
-      };
-    }
+    if (branch.reader) return branch.reader;
+
+    /* Create and cache reader */
+    const ctx = getCtx<T>(path);
+    branch.reader = {
+      read: makeRead(ctx),
+      focus: <U>(selector: Selector<T, U>): SvimmerReader<U> | null => {
+        const subPath = resolveFocusPath(ctx, selector);
+        return subPath ? getOrCreateReader<U>([...path, ...subPath]) : null;
+      },
+      subscribe: ctx.subscribe,
+      onDestroy: ctx.onDestroy,
+      value: ctx.getData,
+    };
 
     return branch.reader as SvimmerReader<T>;
   }
@@ -288,6 +299,9 @@ export function createSvimmerStore<T>(initial: T) {
   return getOrCreateWriter<T>([]);
 }
 
+// -------------------------------------------------------------
+// Shorthand functions
+// -------------------------------------------------------------
 const makeRead =
   <T>(ctx: StoreCtx<T>) =>
   <U>(accessor: Accessor<T, U>) =>
