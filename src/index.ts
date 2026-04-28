@@ -15,7 +15,6 @@ import { createTrackerProxy } from "./core/tracker";
 import { extractPath } from "./core/proxy";
 import { resolvePath, type Path } from "./core/path";
 import {
-  buildDeletedChildren,
   collectDeletedChildren,
   createBranchSlot,
   deleteBranchSlot,
@@ -25,8 +24,8 @@ import {
   type BranchSlot,
 } from "./core/branch-struct";
 import { selector } from "./helpers/selectors";
-import { canHaveChildren, getChild, MISSING, type Missing } from "./core/util";
-import { findDeletedRoots } from "./core/interpret-patches";
+import { MISSING } from "./core/util";
+import { compareBranch } from "./core/interpret-patches";
 /**
  * Selectors work as accessors but not vice-versa.
  * Can be passed into the {@link SvimmerReader.focus | focus} and {@link SvimmerReader.read | read} methods.
@@ -88,37 +87,19 @@ export function createSvimmerStore<T>(initial: T) {
 
   const branches = createBranchSlot(null, null);
 
+  // Value is 'depth' which used to determine update order.
   const touched = new Map<BranchSlot, number>();
   const deletedRoots = new Map<BranchSlot, number>();
   const deletedChildren = new Map<BranchSlot, number>();
+  const accumulateEffects = bindAccumulateEffects(touched, deletedRoots, branches);
 
-  function accumulateTouched(patch: Patch) {
-    walkBranches(branches, patch.path, ({ branch, isTarget, depth }) => {
-      touched.set(branch, depth);
-    });
-  }
-  function accumulateDeleted(patch: Patch, inverse: Patch) {
-    if (patch.op === "add") return;
-
-    const branch = getBranch(branches, patch.path);
-    if (!branch) return;
-
-    const oldVal = inverse.op === "remove" ? MISSING : inverse.value;
-    const newVal = patch.op === "remove" ? MISSING : patch.value;
-
-    findDeletedRoots(
-      branch,
-      oldVal,
-      newVal,
-      patch.path.length,
-      (root, depth) => {
-        deletedRoots.set(root, depth);
-      },
-    );
-  }
+  // -----------------------------------------------------------
+  // Implementation
+  // -----------------------------------------------------------
 
   function notify(patches: Patch[], inversePatches: Patch[]) {
-    { 
+    /* Accumulate effects of patches */
+    {
       // Build touched branches and deleted roots
       touched.clear();
       deletedRoots.clear();
@@ -126,16 +107,15 @@ export function createSvimmerStore<T>(initial: T) {
       for (let i = 0; i < patches.length; i++) {
         const patch = patches[i]!;
         const inversePatch = inversePatches[i]!;
-        accumulateTouched(patch);
-        accumulateDeleted(patch, inversePatch);
+        accumulateEffects(patch, inversePatch);
       }
 
       // Build deleted children from deleted roots
       deletedChildren.clear();
       deletedRoots.forEach((depth, branch) =>
-        collectDeletedChildren(branch, depth, deletedChildren));
+        collectDeletedChildren(branch, depth, deletedChildren),
+      );
     }
-    
 
     // 1. Destroy bottom-up
     const destroyList = Array.from(deletedChildren.entries()).sort(
@@ -177,12 +157,15 @@ export function createSvimmerStore<T>(initial: T) {
     const prevState = state;
     let result!: R;
 
-    const [newState, patches] = produceWithPatches(state, (draft) => {
-      result = fn(draft);
-    });
+    const [newState, patches, inversePatches] = produceWithPatches(
+      state,
+      (draft) => {
+        result = fn(draft);
+      },
+    );
 
     state = newState;
-    if (patches.length !== 0) notify(patches);
+    if (patches.length !== 0) notify(patches, inversePatches);
 
     return result;
   }
@@ -287,3 +270,38 @@ const resolveFocusPath = <T, U>(
 
   return subPath;
 };
+
+const bindAccumulateEffects =
+  (
+    touched: Map<BranchSlot, number>,
+    deletedRoots: Map<BranchSlot, number>,
+    branches: BranchSlot,
+  ) =>
+  (patch: Patch, inverse: Patch) => {
+    // Always touch prefixes/ancestors
+    walkBranches(branches, patch.path, ({ branch, depth }) => {
+      touched.set(branch, depth);
+    });
+
+    // Only replace/remove can delete descendants or change existing child branches
+    if (patch.op === "add") return;
+
+    const branch = getBranch(branches, patch.path);
+    if (!branch) return;
+
+    const oldVal = inverse.value ?? MISSING;
+    const newVal = patch.value ?? MISSING;
+
+    compareBranch(
+      branch,
+      oldVal,
+      newVal,
+      patch.path.length,
+      (branch, depth) => {
+        touched.set(branch, depth);
+      },
+      (branch, depth) => {
+        deletedRoots.set(branch, depth);
+      },
+    );
+  };

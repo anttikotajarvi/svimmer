@@ -2,77 +2,75 @@ import type { BranchSlot } from "./branch-struct";
 import { canHaveChildren, getChild, MISSING, type Missing } from "./util";
 
 /**
- * Finds deleted roots under a cached branch subtree.
+ * Compare one cached branch subtree between old/new values and emit:
+ * - touched surviving branches
+ * - deleted roots (topmost lost subtrees)
  *
- * A "deleted root" is the highest cached branch in some lost subtree.
- * Once such a root is found, `onDeletedRoot` is called and recursion stops
- * for that subtree. Expanding that root into all destroyed descendants is
- * handled separately.
- *
- * Important semantics:
- * - Path identity matters, not object identity.
- * - Replacing an object with another object at the same path does NOT destroy
- *   the branch.
- * - If a branch still exists but becomes a leaf, then its cached children are
- *   the deleted roots, not the branch itself.
- *
- * Examples:
- *
- * before: employee = { name: "John" }
- * after:  employee = { name: "Carl" }
- * -> no deleted roots
- *
- * before: employee = { name: "John" }
- * after:  employee = 123
- * -> cached children under `ceo` become deleted roots
- *
- * before: employee = { name: "John" }
- * after:  employee removed
- * -> `ceo` itself is a deleted root
+ * Semantics:
+ * - Path identity matters, not object identity
+ * - If a branch path survives and its value changes, it is touched
+ * - If a branch path is lost, that branch is a deleted root
+ * - If a branch survives but stops being able to have children,
+ *   its cached children become deleted roots
  */
-export function findDeletedRoots(
+export function compareBranch(
   branch: BranchSlot,
   oldVal: unknown | Missing,
   newVal: unknown | Missing,
   depth: number,
+  onTouched: (branch: BranchSlot, depth: number) => void,
   onDeletedRoot: (branch: BranchSlot, depth: number) => void,
 ): void {
   const oldExists = oldVal !== MISSING;
   const newExists = newVal !== MISSING;
 
-  // If this path did not exist before, nothing can be "lost" here.
+  // If the path did not exist before, nothing can be lost or updated here.
   if (!oldExists) return;
 
-  // This path existed before but not after the transaction.
-  // The current branch is the root of a lost subtree.
+  // The branch path itself was lost.
   if (!newExists) {
     onDeletedRoot(branch, depth);
     return;
   }
 
+  // The branch path survives and its value changed.
+  if (!Object.is(oldVal, newVal)) {
+    onTouched(branch, depth);
+  }
+
   const oldCHC = canHaveChildren(oldVal);
   const newCHC = canHaveChildren(newVal);
 
-  // If the old value had no children, then there are no descendant paths
-  // that could have been lost.
+  // Old value had no children, so no descendant paths could have existed before.
   if (!oldCHC) return;
 
-  // The current branch still exists, but it no longer supports children.
-  // Therefore the current branch survives, but each cached child under it
-  // is the root of a lost subtree.
+  // Branch survives, but all cached descendants are lost.
   if (!newCHC) {
     branch.children.forEach((child, step) => {
       const childOld = getChild(oldVal, step);
-      findDeletedRoots(child, childOld, MISSING, depth + 1, onDeletedRoot);
+      compareBranch(
+        child,
+        childOld,
+        MISSING,
+        depth + 1,
+        onTouched,
+        onDeletedRoot,
+      );
     });
     return;
   }
 
-  // Both old and new values can have children.
-  // Recurse only through cached child branches.
+  // Both old and new can have children: recurse through cached child branches only.
   branch.children.forEach((child, step) => {
     const childOld = getChild(oldVal, step);
     const childNew = getChild(newVal, step);
-    findDeletedRoots(child, childOld, childNew, depth + 1, onDeletedRoot);
+    compareBranch(
+      child,
+      childOld,
+      childNew,
+      depth + 1,
+      onTouched,
+      onDeletedRoot,
+    );
   });
 }
