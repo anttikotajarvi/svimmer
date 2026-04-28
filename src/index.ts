@@ -16,13 +16,17 @@ import { extractPath } from "./core/proxy";
 import { resolvePath, type Path } from "./core/path";
 import {
   buildDeletedChildren,
+  collectDeletedChildren,
   createBranchSlot,
   deleteBranchSlot,
   ensureBranch,
+  getBranch,
   walkBranches,
   type BranchSlot,
 } from "./core/branch-struct";
 import { selector } from "./helpers/selectors";
+import { canHaveChildren, getChild, MISSING, type Missing } from "./core/util";
+import { findDeletedRoots } from "./core/interpret-patches";
 /**
  * Selectors work as accessors but not vice-versa.
  * Can be passed into the {@link SvimmerReader.focus | focus} and {@link SvimmerReader.read | read} methods.
@@ -86,23 +90,52 @@ export function createSvimmerStore<T>(initial: T) {
 
   const touched = new Map<BranchSlot, number>();
   const deletedRoots = new Map<BranchSlot, number>();
-  function accumulateEffects(patch: Patch) {
+  const deletedChildren = new Map<BranchSlot, number>();
+
+  function accumulateTouched(patch: Patch) {
     walkBranches(branches, patch.path, ({ branch, isTarget, depth }) => {
-      if (patch.op === "remove" && isTarget) {
-        deletedRoots.set(branch, depth);
-        return;
-      }
       touched.set(branch, depth);
     });
   }
+  function accumulateDeleted(patch: Patch, inverse: Patch) {
+    if (patch.op === "add") return;
 
-  function notify(patches: Patch[]) {
-    touched.clear();
-    deletedRoots.clear();
+    const branch = getBranch(branches, patch.path);
+    if (!branch) return;
 
-    patches.forEach(accumulateEffects);
+    const oldVal = inverse.op === "remove" ? MISSING : inverse.value;
+    const newVal = patch.op === "remove" ? MISSING : patch.value;
 
-    const deletedChildren = buildDeletedChildren(deletedRoots);
+    findDeletedRoots(
+      branch,
+      oldVal,
+      newVal,
+      patch.path.length,
+      (root, depth) => {
+        deletedRoots.set(root, depth);
+      },
+    );
+  }
+
+  function notify(patches: Patch[], inversePatches: Patch[]) {
+    { 
+      // Build touched branches and deleted roots
+      touched.clear();
+      deletedRoots.clear();
+      // We assume patches and inversePatches have the same length.
+      for (let i = 0; i < patches.length; i++) {
+        const patch = patches[i]!;
+        const inversePatch = inversePatches[i]!;
+        accumulateTouched(patch);
+        accumulateDeleted(patch, inversePatch);
+      }
+
+      // Build deleted children from deleted roots
+      deletedChildren.clear();
+      deletedRoots.forEach((depth, branch) =>
+        collectDeletedChildren(branch, depth, deletedChildren));
+    }
+    
 
     // 1. Destroy bottom-up
     const destroyList = Array.from(deletedChildren.entries()).sort(

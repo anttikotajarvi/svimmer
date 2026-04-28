@@ -14,7 +14,6 @@ export type BranchSlot = {
   writer?: SvimmerWriter<any>;
 }
 
-
 export const createBranchSlot = (parent: BranchSlot | null, step: Step | null): BranchSlot => ({
   step,
   parent,
@@ -28,6 +27,17 @@ export const createBranchSlot = (parent: BranchSlot | null, step: Step | null): 
 export function deleteBranchSlot(branch: BranchSlot): boolean {
 if (branch.parent === null || branch.step === null) return false;
   return branch.parent.children.delete(branch.step);
+}
+
+export function getBranch(root: BranchSlot, path: Path): BranchSlot | null {
+  let branch: BranchSlot | undefined = root;
+
+  for (const step of path) {
+    branch = branch.children.get(step);
+    if (!branch) return null;
+  }
+
+  return branch;
 }
 
 /**
@@ -138,25 +148,21 @@ export function walkBranchSubtree(
 export type DeletedMap = Map<BranchSlot, number>;
 
 /**
- * Expands deleted roots into the full deleted subtree map.
- * Includes the deleted roots themselves.
+ * Expands one deleted root into the full deleted subtree map.
+ * Includes the root branch itself.
  *
- * If overlapping deleted roots are present, duplicates are harmless;
- * the same branch just gets set again.
+ * If the same branch is reached more than once from overlapping delete roots,
+ * the deeper depth wins, though in practice depth should be stable.
  */
-export function buildDeletedChildren(
-  deletedRoots: DeletedMap,
-): DeletedMap {
-  const deletedChildren: DeletedMap = new Map();
-
-  for (const [root, depth] of deletedRoots) {
-    walkBranchSubtree(root, depth, (branch, branchDepth) => {
-      const prev = deletedChildren.get(branch);
-      if (prev == null || branchDepth > prev) {
-        deletedChildren.set(branch, branchDepth);
-      }
-    });
-  }
-
-  return deletedChildren;
+export function collectDeletedChildren(
+  root: BranchSlot,
+  rootDepth: number,
+  deletedChildren: DeletedMap,
+): void {
+  walkBranchSubtree(root, rootDepth, (branch, branchDepth) => {
+    const prev = deletedChildren.get(branch);
+    if (prev == null || branchDepth > prev) {
+      deletedChildren.set(branch, branchDepth);
+    }
+  });
 }
