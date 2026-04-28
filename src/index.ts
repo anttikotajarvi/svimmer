@@ -13,7 +13,7 @@ enableMapSet();
 
 import { createTrackerProxy } from "./core/tracker";
 import { extractPath } from "./core/proxy";
-import { resolvePath, type Path } from "./core/path";
+import { isRootPath, replaceChild, resolvePath, type Path } from "./core/path";
 import {
   collectDeletedChildren,
   createBranchSlot,
@@ -73,11 +73,13 @@ export interface SvimmerReader<T> {
 export interface SvimmerWriter<T> extends SvimmerReader<T> {
   focus<U>(selector: Selector<T, U>): SvimmerWriter<U> | null;
   transact<R>(fn: Transactor<T, R>): R;
+  set: (value: T) => void;
 }
 
 interface StoreCtx<T> {
   getData: () => Immutable<T>;
   transact: SvimmerWriter<T>["transact"];
+  setData: SvimmerWriter<T>["set"];
   subscribe: (run: Subscriber<SvimmerReader<T>>) => Unsubscriber;
   onDestroy: (cb: () => void) => Unsubscriber;
 }
@@ -91,12 +93,15 @@ export function createSvimmerStore<T>(initial: T) {
   const touched = new Map<BranchSlot, number>();
   const deletedRoots = new Map<BranchSlot, number>();
   const deletedChildren = new Map<BranchSlot, number>();
-  const accumulateEffects = bindAccumulateEffects(touched, deletedRoots, branches);
+  const accumulateEffects = bindAccumulateEffects(
+    touched,
+    deletedRoots,
+    branches,
+  );
 
   // -----------------------------------------------------------
   // Implementation
   // -----------------------------------------------------------
-
   function notify(patches: Patch[], inversePatches: Patch[]) {
     /* Accumulate effects of patches */
     {
@@ -154,7 +159,6 @@ export function createSvimmerStore<T>(initial: T) {
   }
 
   function rootTransact<R>(fn: Transactor<T, R>) {
-    const prevState = state;
     let result!: R;
 
     const [newState, patches, inversePatches] = produceWithPatches(
@@ -170,6 +174,78 @@ export function createSvimmerStore<T>(initial: T) {
     return result;
   }
 
+  function rootSet(value: T) {
+    const [newState, patches, inversePatches] = produceWithPatches<T>(
+      state,
+      (draft) => {
+        return value as any;
+      },
+    );
+
+    state = newState;
+    if (patches.length !== 0) notify(patches, inversePatches);
+  }
+
+  // Just a thin per-path facade.
+  const getCtx = <X>(path: Path): StoreCtx<X> => {
+    const getData = () => {
+      // TODO: This reference needs to be cached in the future for sure.
+      //       Currently this resolution is done on every read call.
+      const res = resolvePath(state, path);
+      if (!res.ok)
+        throw new Error("getData: Failed to resolve path", { cause: res });
+      return res.value as Immutable<X>;
+    };
+    /**
+     * This replaces through the parent, so it will
+     *  not work for the root.
+     */
+    const nonRootSetData: StoreCtx<T>["setData"] = (value) => {
+      void rootTransact((draft) => {
+        let res = resolvePath(draft, path);
+        /* When this is invoked in createNode 
+              the target path should already be ensured! */
+        if (!res.ok) {
+          throw new Error("set: Failed to resolve path", { cause: res });
+        }
+        // This wont work for root so
+        if (res.parent === undefined || res.step == null) {
+          throw new Error("Internal error: setData: missing parent");
+        }
+        replaceChild(res.parent, res.step, value);
+      });
+    };
+    const setData = isRootPath(path) ? (rootSet as any) : nonRootSetData;
+    return {
+      getData,
+      setData,
+      transact: (fn) => {
+        return rootTransact((draft) => {
+          let res = resolvePath(draft, path);
+          /* When this is invoked in createNode 
+              the target path should already be ensured! */
+          if (!res.ok) {
+            throw new Error("transact: Failed to resolve path", { cause: res });
+          }
+          return fn(res.value as any);
+        });
+      },
+
+      subscribe: (fn) => {
+        const branch = ensureBranch(branches, path);
+        branch.subs.add(fn as Subscriber<unknown>);
+        const reader = getOrCreateReader<X>(path);
+        fn(reader);
+        return () => branch.subs.delete(fn as Subscriber<unknown>);
+      },
+      onDestroy: (fn) => {
+        const branch = ensureBranch(branches, path);
+        branch.onDestroy.add(fn);
+        return () => branch.onDestroy.delete(fn);
+      },
+    };
+  };
+
   function getOrCreateWriter<T>(path: Path): SvimmerWriter<T> {
     const branch = ensureBranch(branches, path);
     if (!branch.writer) {
@@ -184,6 +260,7 @@ export function createSvimmerStore<T>(initial: T) {
         subscribe: ctx.subscribe,
         onDestroy: ctx.onDestroy,
         value: ctx.getData,
+        set: ctx.setData,
       };
     }
     return branch.writer as SvimmerWriter<T>;
@@ -207,46 +284,6 @@ export function createSvimmerStore<T>(initial: T) {
 
     return branch.reader as SvimmerReader<T>;
   }
-
-  // Just a thin per-path facade.
-  const getCtx = <T>(path: Path): StoreCtx<T> => {
-    const getData = () => {
-      // TODO: This reference needs to be cached in the future for sure.
-      //       Currently this resolution is done on every read call.
-      const res = resolvePath(state, path);
-      if (!res.ok)
-        throw new Error("getData: Failed to resolve path", { cause: res });
-      return res.value as Immutable<T>;
-    };
-
-    return {
-      getData,
-      transact: (fn) => {
-        return rootTransact((draft) => {
-          let res = resolvePath(draft, path);
-          /* When this is invoked in createNode 
-              the target path should already be ensured! */
-          if (!res.ok) {
-            throw new Error("transact: Failed to resolve path", { cause: res });
-          }
-          return fn(res.value as any);
-        });
-      },
-
-      subscribe: (fn) => {
-        const branch = ensureBranch(branches, path);
-        branch.subs.add(fn as Subscriber<unknown>);
-        const reader = getOrCreateReader<T>(path);
-        fn(reader);
-        return () => branch.subs.delete(fn as Subscriber<unknown>);
-      },
-      onDestroy: (fn) => {
-        const branch = ensureBranch(branches, path);
-        branch.onDestroy.add(fn);
-        return () => branch.onDestroy.delete(fn);
-      },
-    };
-  };
 
   return getOrCreateWriter<T>([]);
 }
