@@ -23,34 +23,51 @@ import {
   walkBranches,
   type BranchSlot,
 } from "./core/branch-struct";
-import { selector } from "./helpers/selectors";
 import { MISSING } from "./core/util";
 import { compareBranch } from "./core/interpret-patches";
-/**
- * Selectors work as accessors but not vice-versa.
- * Can be passed into the {@link SvimmerReader.focus | focus} and {@link SvimmerReader.read | read} methods.
- * - Use {@link selector} to create selectors
- */
-export interface Selector<T, U> extends Accessor<T, U> {
-  readonly [SelectorBrand]: true;
-}
-declare const SelectorBrand: unique symbol;
+import type { Subscriber, Unsubscriber } from "./generic";
+
 
 /**
- * Accessors can only be used with the read method.
- * Use accessors to read and transform data.
- * - Can be with the {@link SvimmerReader.read | read} method.
+ * Selectors are functions used to navigate from one node to a child node.
+ * Can be passed into the {@link SvimmerReader.focus | focus} method.
+ *
+ * Selectors are also valid accessors, so they can be passed into
+ * {@link SvimmerReader.read | read} as well.
+ *
+ * Selectors are plain functions for ergonomic direct use:
+ * `node.focus(x => x.child)`
+ */
+export type Selector<T, U> = (x: Immutable<T>) => U;
+
+/**
+ * Accessors are pure read functions over immutable node data.
+ * Can be passed into the {@link SvimmerReader.read | read} method.
+ *
+ * Unlike selectors, accessors are not intended for
+ * {@link SvimmerReader.focus | focus}.
  */
 export type Accessor<T, U> = (x: Immutable<T>) => U;
 
+declare const AccessorBrand: unique symbol;
+
 /**
- * Transactors are for mutating draft functions.
+ * Branded accessors are opt-in read helpers.
+ * They work like normal accessors with {@link SvimmerReader.read | read},
+ * but are not intended for {@link SvimmerReader.focus | focus}.
+ *
+ * Use {@link accessor} to create branded accessors for reusable read helpers.
+ */
+export type BrandedAccessor<T, U> =
+  Accessor<T, U> & { readonly [AccessorBrand]: true };
+
+/**
+ * Transactors are draft mutation functions.
  * Can be passed into the {@link SvimmerWriter.transact | transact} method.
+ * 
+ * The return value of the transactor is passed through and returned by the {@link SvimmerWriter.transact | transact} method.
  */
 export type Transactor<T, R> = (draft: Draft<T>) => R;
-
-export type Unsubscriber = () => void;
-export type Subscriber<T> = (value: Immutable<T>) => void;
 
 export interface SvimmerReader<T> {
   read<U>(accessor: Accessor<T, U>): U;
@@ -64,10 +81,11 @@ export interface SvimmerReader<T> {
    * - Bad design
    *
    * Should probably be only used for:
+   * - Retrieving primitive values
    * - Creating a deep clone
-   * - Serializing right away
+   * - Serialization
    */
-  value: () => Immutable<T>;
+  value: () => T;
 }
 
 export interface SvimmerWriter<T> extends SvimmerReader<T> {

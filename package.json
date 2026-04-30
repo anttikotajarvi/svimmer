@@ -1,5 +1,5 @@
 {
-  "name": "svimmer",
+  "name": "svimmer-store",
   "version": "0.0.1",
   "type": "module",
   "files": [
@@ -22,7 +22,7 @@
   "scripts": {
     "build": "zshy",
     "dev": "zshy --watch",
-    "prepack": "zshy"
+    "prepack": "bun run build"
   },
   "zshy": {
     "cjs": false,

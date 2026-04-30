@@ -1,4 +1,5 @@
-import type { Subscriber, SvimmerReader, SvimmerWriter } from "..";
+import type { SvimmerReader, SvimmerWriter } from "..";
+import type { Subscriber } from "../generic";
 import type { Path, Step } from "./path";
 
 export type BranchSlot = {
