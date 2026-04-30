@@ -74,14 +74,6 @@ export type WalkResult<S> = {
 
 /**
  * Walks root -> ... along `path`.
- * Calls `fn` for root and then each existing child branch until:
- * - the path ends, or
- * - the branch tree ends
- *
- * Returns the final accumulator state.
- */
-/**
- * Walks root -> ... along `path`.
  * Calls `fn` for the root and then each existing child branch until:
  * - the path ends, or
  * - the branch tree ends
