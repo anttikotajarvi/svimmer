@@ -13,9 +13,12 @@ export type BranchSlot = {
 
   reader?: SvimmerReader<any>;
   writer?: SvimmerWriter<any>;
-}
+};
 
-export const createBranchSlot = (parent: BranchSlot | null, step: Step | null): BranchSlot => ({
+export const createBranchSlot = (
+  parent: BranchSlot | null,
+  step: Step | null,
+): BranchSlot => ({
   step,
   parent,
   children: new Map(),
@@ -26,7 +29,7 @@ export const createBranchSlot = (parent: BranchSlot | null, step: Step | null): 
 });
 
 export function deleteBranchSlot(branch: BranchSlot): boolean {
-if (branch.parent === null || branch.step === null) return false;
+  if (branch.parent === null || branch.step === null) return false;
   return branch.parent.children.delete(branch.step);
 }
 

@@ -22,7 +22,8 @@
   "scripts": {
     "build": "zshy",
     "dev": "zshy --watch",
-    "prepack": "bun run build"
+    "prepack": "bun run build",
+    "test": "vitest run"
   },
   "zshy": {
     "cjs": false,
@@ -34,7 +35,8 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "zshy": "^0.7.0"
+    "zshy": "^0.7.0",
+    "vitest": "^4.1.5"
   },
   "peerDependencies": {
     "typescript": "^5"
