@@ -1,28 +1,25 @@
-import type { Draft } from "immer"
-import type { Transactor } from ".."
-import type { LastReturn } from "../generic"
+import type { Draft } from "immer";
+import type { Transactor } from "..";
+import type { LastReturn } from "../generic";
 /**
  * Gives easy type inference and ergonomics.
  * @example
  * ```ts
  * type Person = {
-*   name:string;
-*   age: number;
-* }
-* const setAge = (age:number) => transactor((draft:Person) => {
-*   const prev = draft.age;
-*   draft.age = age;
-*   return prev;
-* })
-* // Type of setAge is inferred as: (age: number) => Transactor<Person, number>
-* ```
+ *   name:string;
+ *   age: number;
+ * }
+ * const setAge = (age:number) => transactor((draft:Person) => {
+ *   const prev = draft.age;
+ *   draft.age = age;
+ *   return prev;
+ * })
+ * // Type of setAge is inferred as: (age: number) => Transactor<Person, number>
+ * ```
  */
-export function transactor<T, R>(
-  fn: (draft: Draft<T>) => R
-): Transactor<T, R> {
+export function transactor<T, R>(fn: (draft: Draft<T>) => R): Transactor<T, R> {
   return fn;
 }
-
 
 /**
  * Compose multiple transactors into a new transactor.
@@ -57,13 +54,33 @@ export function begin<T, Txs extends readonly Transactor<T, any>[]>(
   ...txs: Txs
 ): Transactor<T, LastReturn<Txs>> {
   return (draft) => {
-    let out: unknown = undefined
+    let out: unknown = undefined;
 
     for (const tx of txs) {
-      out = tx(draft)
+      out = tx(draft);
     }
 
-    return out as LastReturn<Txs>
-  }
+    return out as LastReturn<Txs>;
+  };
 }
 
+// -------------------------------------------------------------
+// Primitive transactors
+// -------------------------------------------------------------
+
+export const setKey = <T extends object, K extends keyof Draft<T>>(
+    key: K,
+    value: Draft<T>[K],
+  ): Transactor<T, void> =>
+  (draft) => {
+    draft[key] = value;
+  };
+
+export const deleteKey = <T extends object, K extends keyof Draft<T>>(
+    key: K,
+  ): Transactor<T, boolean> =>
+  (draft) => {
+    if (!(key in draft)) return false;
+    delete draft[key];
+    return true;
+  };

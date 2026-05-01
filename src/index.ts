@@ -39,7 +39,7 @@ type Unfocus<T> =
  * Selectors are plain functions for ergonomic direct use:
  * `node.focus(x => x.child)`
  */
-export type Selector<T, U> = (x: FocusProxy<Immutable<T>>) => U;
+export type Selector<T, U> = (x: FocusProxy<T>) => U;
 
 /**
  * Accessors are pure read functions over immutable node data.
@@ -331,8 +331,8 @@ const resolveFocusPath = <T, U>(
   selector: Selector<T, U>,
 ): Path | null => {
   const data = ctx.getData();
-  const proxy = createTrackerProxy(data);
-  const tracked = selector(proxy as any);
+  const proxy = createTrackerProxy(data) as FocusProxy<T>;
+  const tracked = selector(proxy);
   const subPath = extractPath(tracked as unknown);
 
   const res = resolvePath(data, subPath);
