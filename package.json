@@ -17,6 +17,10 @@
     "./helpers/accessors": {
       "types": "./dist/helpers/accessors.d.ts",
       "default": "./dist/helpers/accessors.js"
+    },
+    "./helpers/transactors": {
+      "types": "./dist/helpers/transactors.d.ts",
+      "default": "./dist/helpers/transactors.js"
     }
   },
   "scripts": {
@@ -30,7 +34,8 @@
     "exports": {
       ".": "./src/index.ts",
       "./helpers/selectors": "./src/helpers/selectors.ts",
-      "./helpers/accessors": "./src/helpers/accessors.ts"
+      "./helpers/accessors": "./src/helpers/accessors.ts",
+      "./helpers/transactors": "./src/helpers/transactors.ts"
     }
   },
   "devDependencies": {
