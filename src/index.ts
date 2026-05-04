@@ -74,16 +74,16 @@ export type BrandedAccessor<T, U> = Accessor<T, U> & {
  */
 export type Transactor<T, R> = (draft: Draft<T>) => R;
 
-type Focused<U> = Exclude<Unfocus<U>, undefined>;
-type Focusable<U> = [Extract<Unfocus<U>, undefined>] extends [never]
+export type Focused<U> = Exclude<Unfocus<U>, undefined>;
+export type Focusable<U> = [Extract<Unfocus<U>, undefined>] extends [never]
   ? SvimmerWriter<Unfocus<U>>
   : SvimmerWriter<Focused<U>> | null;
 
-type FocusReaderReturn<U> = [Extract<Unfocus<U>, undefined>] extends [never]
+export type FocusReaderReturn<U> = [Extract<Unfocus<U>, undefined>] extends [never]
   ? SvimmerReader<Unfocus<U>>
   : SvimmerReader<Focused<U>> | null;
 
-type FocusWriterReturn<U> = [Extract<Unfocus<U>, undefined>] extends [never]
+export type FocusWriterReturn<U> = [Extract<Unfocus<U>, undefined>] extends [never]
   ? SvimmerWriter<Unfocus<U>>
   : SvimmerWriter<Focused<U>> | null;
 
@@ -133,6 +133,7 @@ interface StoreCtx<T> {
 // -----------------------------------------------------------
 export function createSvimmerStore<T>(initial: T) {
   let state = initial;
+  let txId = 0;
 
   const branches = createBranchSlot(null, null);
 
@@ -167,6 +168,9 @@ export function createSvimmerStore<T>(initial: T) {
       deletedRoots.forEach((depth, branch) =>
         collectDeletedChildren(branch, depth, deletedChildren),
       );
+
+      // Update transaction id
+      txId += 1
     }
 
     // 1. Destroy bottom-up
@@ -193,7 +197,7 @@ export function createSvimmerStore<T>(initial: T) {
     for (const [branch] of touchedList) {
       if (branch.stale) continue;
       if (!branch.reader) continue;
-      branch.subs.forEach((fn) => fn(branch.reader));
+      branch.subs.forEach((fn) => fn(branch.reader, txId));
     }
 
     // 3. Cleanup deleted roots from trie
@@ -285,7 +289,7 @@ export function createSvimmerStore<T>(initial: T) {
       const branch = ensureBranch(branches, path);
       branch.subs.add(fn as Subscriber<unknown>);
       const reader = getOrCreateReader<X>(path);
-      fn(reader as any);
+      fn(reader as any, txId);
       return () => branch.subs.delete(fn as Subscriber<unknown>);
     };
 
