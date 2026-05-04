@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { createSvimmerStore, type SvimmerWriter } from "../src";
 import { begin } from "../src/helpers/transactors";
 import { type CompanyDoc, companyFixture, type Employee } from "./assets/company";
-// Adjust these imports to your project structure.
+
 function makeStore(): SvimmerWriter<CompanyDoc> {
   return createSvimmerStore<CompanyDoc>(structuredClone(companyFixture));
 }
@@ -27,12 +27,15 @@ describe("Svimmer integration: read and focus", () => {
     expect(ceo!.read((x) => x.name)).toBe("Alice North");
   });
 
-  it("returns null when focusing missing paths", () => {
+  it("returns null when focusing missing or undefined values", () => {
     const store = makeStore();
 
     expect(store.focus((x) => x.employees.get("missing"))).toBeNull();
     expect(store.focus((x) => x.projects[99])).toBeNull();
     expect(store.focus((x) => x.aliases.doesNotExist)).toBeNull();
+
+    const bob = store.focus((x) => x.employees.get("e2"))!;
+    expect(bob.focus((x) => x.contact.phone)).toBeNull();
   });
 
   it("returns stable cached handles for the same path", () => {
@@ -63,7 +66,7 @@ describe("Svimmer integration: transact and composite writes", () => {
     });
 
     const bob = store.focus((x) => x.employees.get("e2"))!;
-    bob!.transact((d) => {
+    bob.transact((d) => {
       d.age += 1;
       d.tags.add("platform");
     });
@@ -104,6 +107,7 @@ describe("Svimmer integration: transact and composite writes", () => {
     const setTitle = (title: string) => (draft: Employee) => {
       draft.title = title;
     };
+
     const bumpAge = (by: number) => (draft: Employee) => {
       draft.age += by;
       return draft.age;
@@ -114,6 +118,17 @@ describe("Svimmer integration: transact and composite writes", () => {
     expect(result).toBe(33);
     expect(store.read((x) => x.employees.get("e2")!.title)).toBe("Senior Engineer");
     expect(store.read((x) => x.employees.get("e2")!.age)).toBe(33);
+  });
+
+  it("forbids set(undefined) on a value handle", () => {
+    const store = makeStore();
+    const phone = store.focus((x) => x.employees.get("e1"))!
+      .focus((x) => x.contact.phone)!;
+
+    expect(phone.read((x) => x)).toBe("123-456");
+
+    expect(() => (phone as any).set(undefined)).toThrow();
+    expect(phone.read((x) => x)).toBe("123-456");
   });
 });
 
@@ -228,7 +243,7 @@ describe("Svimmer integration: destroy lifecycle and path survival", () => {
     expect(email.read((x) => x)).toBe("alice.prime@northwind.test");
   });
 
-  it("destroys only missing descendants when a surviving branch loses a child path", () => {
+  it("destroys only the undefined child when a surviving branch loses a child value", () => {
     const store = makeStore();
 
     const employee = store.focus((x) => x.employees.get("e1"))!;
@@ -258,6 +273,25 @@ describe("Svimmer integration: destroy lifecycle and path survival", () => {
     expect(phoneDestroyed).toHaveBeenCalledTimes(1);
 
     expect(employee.read((x) => x.contact.email)).toBe("alice@northwind.test");
+    expect(contact.focus((x) => x.phone)).toBeNull();
+  });
+
+  it("destroys a focused child when its parent explicitly sets it to undefined", () => {
+    const store = makeStore();
+
+    const employee = store.focus((x) => x.employees.get("e1"))!;
+    const contact = employee.focus((x) => x.contact)!;
+    const phone = contact.focus((x) => x.phone)!;
+
+    const phoneDestroyed = vi.fn();
+    phone.onDestroy(phoneDestroyed);
+
+    contact.transact((draft) => {
+      draft.phone = undefined;
+    });
+
+    expect(phoneDestroyed).toHaveBeenCalledTimes(1);
+    expect(contact.focus((x) => x.phone)).toBeNull();
   });
 });
 
@@ -292,8 +326,3 @@ describe("Svimmer integration: holistic multi-branch transaction", () => {
     expect(bobHits).toHaveBeenCalledTimes(2);
   });
 });
-
-// Add later when `set(...)` / stale-call behavior is finalized:
-// - whole-node replacement tests
-// - root replacement tests
-// - stale handle read/focus/transact failure tests

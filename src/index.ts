@@ -11,7 +11,11 @@ import {
 enablePatches();
 enableMapSet();
 
-import { createTrackerProxy, type FocusProxy, type FocusValue } from "./core/tracker";
+import {
+  createTrackerProxy,
+  type FocusProxy,
+  type FocusValue,
+} from "./core/tracker";
 import { extractPath } from "./core/proxy";
 import { isRootPath, replaceChild, resolvePath, type Path } from "./core/path";
 import {
@@ -26,8 +30,7 @@ import {
 import { MISSING } from "./core/util";
 import { compareBranch } from "./core/interpret-patches";
 import type { Subscriber, Unsubscriber } from "./generic";
-type Unfocus<T> =
-  T extends FocusValue<infer V> ? V : never;
+type Unfocus<T> = T extends FocusValue<infer V> ? V : never;
 
 /**
  * Selectors are functions used to navigate from one node to a child node.
@@ -59,20 +62,38 @@ declare const AccessorBrand: unique symbol;
  *
  * Use {@link accessor} to create branded accessors for reusable read helpers.
  */
-export type BrandedAccessor<T, U> =
-  Accessor<T, U> & { readonly [AccessorBrand]: true };
+export type BrandedAccessor<T, U> = Accessor<T, U> & {
+  readonly [AccessorBrand]: true;
+};
 
 /**
  * Transactors are draft mutation functions.
  * Can be passed into the {@link SvimmerWriter.transact | transact} method.
- * 
+ *
  * The return value of the transactor is passed through and returned by the {@link SvimmerWriter.transact | transact} method.
  */
 export type Transactor<T, R> = (draft: Draft<T>) => R;
 
+type Focused<U> = Exclude<Unfocus<U>, undefined>;
+type Focusable<U> = [Extract<Unfocus<U>, undefined>] extends [never]
+  ? SvimmerWriter<Unfocus<U>>
+  : SvimmerWriter<Focused<U>> | null;
+
+type FocusReaderReturn<U> = [Extract<Unfocus<U>, undefined>] extends [never]
+  ? SvimmerReader<Unfocus<U>>
+  : SvimmerReader<Focused<U>> | null;
+
+type FocusWriterReturn<U> = [Extract<Unfocus<U>, undefined>] extends [never]
+  ? SvimmerWriter<Unfocus<U>>
+  : SvimmerWriter<Focused<U>> | null;
+
 export interface SvimmerReader<T> {
   read<U>(accessor: Accessor<T, U>): U;
-  focus<U>(selector: Selector<T, U>): SvimmerReader<Unfocus<U>> | null;
+  focus<U>(
+    selector: Selector<T, U>,
+  ): [Extract<Unfocus<U>, undefined>] extends [never]
+    ? SvimmerReader<Unfocus<U>>
+    : SvimmerReader<Focused<U>> | null;
   subscribe(run: (node: SvimmerReader<T>) => void): Unsubscriber;
   onDestroy: (cb: () => void) => Unsubscriber;
   /**
@@ -90,13 +111,17 @@ export interface SvimmerReader<T> {
 }
 
 export interface SvimmerWriter<T> extends SvimmerReader<T> {
-  focus<U>(selector: Selector<T, U>): SvimmerWriter<Unfocus<U>> | null;
+  focus<U>(
+    selector: Selector<T, U>,
+  ): [Extract<Unfocus<U>, undefined>] extends [never]
+    ? SvimmerWriter<Unfocus<U>>
+    : SvimmerWriter<Focused<U>> | null;
   transact<R>(fn: Transactor<T, R>): R;
-  set: (value: T) => void;
+  set(value: Exclude<T, undefined>): void;
 }
 
 interface StoreCtx<T> {
-  getData: () => Immutable<T>;
+  getData: () => T;
   transact: SvimmerWriter<T>["transact"];
   setData: SvimmerWriter<T>["set"];
   subscribe: (run: Subscriber<SvimmerReader<T>>) => Unsubscriber;
@@ -216,7 +241,7 @@ export function createSvimmerStore<T>(initial: T) {
       const res = resolvePath(state, path);
       if (!res.ok)
         throw new Error("getData: Failed to resolve path", { cause: res });
-      return res.value as Immutable<X>;
+      return res.value as X;
     };
 
     /**
@@ -224,6 +249,11 @@ export function createSvimmerStore<T>(initial: T) {
      *  not work for the root.
      */
     const nonRootSetData: StoreCtx<T>["setData"] = (value) => {
+      if (value === undefined) {
+        throw new Error(
+          "set(undefined) is not allowed; undefined means absence",
+        );
+      }
       void rootTransact((draft) => {
         let res = resolvePath(draft, path);
         /* When this is invoked in createNode 
@@ -276,37 +306,52 @@ export function createSvimmerStore<T>(initial: T) {
 
   function getOrCreateWriter<T>(path: Path): SvimmerWriter<T> {
     const branch = ensureBranch(branches, path);
-    if (branch.writer) return branch.writer;
+    if (branch.writer) return branch.writer as SvimmerWriter<T>;
 
-    /* Create and cache writer */
     const ctx = getCtx<T>(path);
+
+    const focus = <U>(selector: Selector<T, U>): FocusWriterReturn<U> => {
+      const subPath = resolveFocusPath(ctx, selector);
+      if (!subPath) return null as FocusWriterReturn<U>;
+
+      return getOrCreateWriter<Focused<U>>([
+        ...path,
+        ...subPath,
+      ]) as FocusWriterReturn<U>;
+    };
+
     branch.writer = {
       transact: ctx.transact,
       read: makeRead(ctx),
-      focus: <U>(selector: Selector<T, U>): SvimmerWriter<Unfocus<U>> | null => {
-        const subPath = resolveFocusPath(ctx, selector);
-        return subPath ? getOrCreateWriter<U>([...path, ...subPath]) as SvimmerWriter<Unfocus<U>>: null;
-      },
+      focus,
       subscribe: ctx.subscribe,
       onDestroy: ctx.onDestroy,
       value: ctx.getData,
       set: ctx.setData,
     };
+
     return branch.writer as SvimmerWriter<T>;
   }
 
-  function getOrCreateReader<T>(path: Path) {
+  function getOrCreateReader<T>(path: Path): SvimmerReader<T> {
     const branch = ensureBranch(branches, path);
-    if (branch.reader) return branch.reader;
+    if (branch.reader) return branch.reader as SvimmerReader<T>;
 
-    /* Create and cache reader */
     const ctx = getCtx<T>(path);
+
+    const focus = <U>(selector: Selector<T, U>): FocusReaderReturn<U> => {
+      const subPath = resolveFocusPath(ctx, selector);
+      if (!subPath) return null as FocusReaderReturn<U>;
+
+      return getOrCreateReader<Focused<U>>([
+        ...path,
+        ...subPath,
+      ]) as FocusReaderReturn<U>;
+    };
+
     branch.reader = {
       read: makeRead(ctx),
-      focus: <U>(selector: Selector<T, U>): SvimmerReader<Unfocus<U>> | null => {
-        const subPath = resolveFocusPath(ctx, selector);
-        return subPath ? getOrCreateReader<U>([...path, ...subPath]) : null;
-      },
+      focus,
       subscribe: ctx.subscribe,
       onDestroy: ctx.onDestroy,
       value: ctx.getData,
@@ -324,7 +369,7 @@ export function createSvimmerStore<T>(initial: T) {
 const makeRead =
   <T>(ctx: StoreCtx<T>) =>
   <U>(accessor: Accessor<T, U>) =>
-    accessor(ctx.getData());
+    accessor(ctx.getData() as Immutable<T>);
 
 const resolveFocusPath = <T, U>(
   ctx: StoreCtx<T>,
@@ -337,7 +382,7 @@ const resolveFocusPath = <T, U>(
 
   const res = resolvePath(data, subPath);
   if (!res.ok) return null;
-
+  if (res.value === undefined) return null;
   return subPath;
 };
 
@@ -359,8 +404,15 @@ const bindAccumulateEffects =
     const branch = getBranch(branches, patch.path);
     if (!branch) return;
 
-    const oldVal = inverse.value ?? MISSING;
-    const newVal = patch.value ?? MISSING;
+    const oldVal =
+      inverse.op === "remove" || inverse.value === undefined
+        ? MISSING
+        : inverse.value;
+
+    const newVal =
+      patch.op === "remove" || patch.value === undefined
+        ? MISSING
+        : patch.value;
 
     compareBranch(
       branch,

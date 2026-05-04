@@ -8,7 +8,6 @@
 
 
 /* eslint-disable @typescript-eslint/no-unsafe-return,@typescript-eslint/ban-types */
-/* eslint-disable @typescript-eslint/no-unsafe-return,@typescript-eslint/ban-types */
 import type { Step } from "./path";
 
 export const symTrackerDetails = Symbol("details");
@@ -20,23 +19,38 @@ type TrackerDetails<T> = {
   property: PropertyKey | undefined;
 };
 
+/**
+ * User-facing focus proxy marker.
+ * Only used for extracting the focused value type.
+ */
 export interface FocusValue<T> {
   readonly [symFocusValue]: T;
 }
 
 export type Unfocus<T> = T extends FocusValue<infer V> ? V : never;
 
+/**
+ * User-facing selector proxy type.
+ *
+ * Rules:
+ * - object property access keeps the declared property type
+ * - array index access yields E | undefined
+ * - Map.get(...) yields V | undefined
+ *
+ * This matches the value-handle model:
+ * - undefined means absence
+ * - null is a real value
+ */
 export type FocusProxy<T> =
   FocusValue<T> &
     (
       T extends ReadonlyMap<infer K, infer V>
         ? {
-            get(key: K & Step): FocusProxy<V>;
+            get(key: K & Step): FocusProxy<V | undefined>;
           }
         : T extends readonly (infer E)[]
           ? {
-              readonly [n: number]: FocusProxy<E>;
-              at(index: number): FocusProxy<E>;
+              readonly [n: number]: FocusProxy<E | undefined>;
             }
           : T extends object
             ? {
@@ -45,6 +59,10 @@ export type FocusProxy<T> =
             : {}
     );
 
+/**
+ * Internal proxy type with tracker metadata.
+ * This metadata should not be part of normal selector ergonomics.
+ */
 export type TrackerProxy<T> =
   FocusProxy<T> & {
     readonly [symTrackerDetails]: TrackerDetails<T>;
@@ -64,7 +82,6 @@ export function createTrackerProxy<T>(
   parent?: object,
   property?: PropertyKey,
 ): TrackerProxy<T> {
-  // we need the proxy object itself available inside traps
   let self!: TrackerProxy<T>;
 
   const details: TrackerDetails<T> = {
@@ -76,10 +93,10 @@ export function createTrackerProxy<T>(
   self = new Proxy(
     {},
     {
-      get(_target: never, p: PropertyKey, _receiver: never) {
+      get(_target: never, p: PropertyKey) {
         if (p === symTrackerDetails) return details;
 
-        // Special-case Map.get(...)
+        // Capture Map.get(key) as one path step
         if (p === "get" && value instanceof Map) {
           return ((key: unknown) => {
             if (!isStep(key)) {
@@ -93,19 +110,6 @@ export function createTrackerProxy<T>(
           }) as unknown;
         }
 
-        // Optional: Array.at(...)
-        if (p === "at" && Array.isArray(value)) {
-          return ((index: number) => {
-            if (!Number.isInteger(index)) {
-              throw new Error("TrackerProxy only supports Array.at with integer indices");
-            }
-
-            const normalized = index < 0 ? value.length + index : index;
-            const result = value[normalized];
-            return createTrackerProxy(result, self as object, normalized);
-          }) as unknown;
-        }
-
         const result = (() => {
           try {
             return Reflect.get(value as object, p);
@@ -114,7 +118,7 @@ export function createTrackerProxy<T>(
           }
         })();
 
-        // array indices come through as strings
+        // Proxy array indexing arrives as string keys like "0"
         const prop =
           typeof p === "string" &&
           Array.isArray(value) &&
