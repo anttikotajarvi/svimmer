@@ -1,288 +1,159 @@
-## svimmer: preliminary design
+## svimmer (beta)
 
-### Core idea
+Svimmer is a handle-based state model built on Immer.
 
-A Svimmer store is a centralize document state.
-
-State is accessed only through **nodes**.
-
-A node is a handle to a **path** in the root state.
+You work with a single root store.
+You then focus into state with handles.
 
 ---
 
-### Node kinds
+## Core model
 
-#### Reader
+- State is accessed through **handles**.
+- A handle points to a value path in the root state.
+- Handles come in two permission levels:
+  - **Reader**: can read and observe.
+  - **Writer**: can read, observe, and mutate.
 
-* `read(accessor)`
-* `focus(selector)`
-* `subscribe(cb)`
-* `onDestroy(cb)`
+### Permissions are inherited
 
-#### Writer
+- `writer.focus(...)` returns a writer handle.
+- `reader.focus(...)` returns a reader handle.
 
-* everything from Reader
-* `transact(mutator)`
-
-A writer is a reader with write access.
+This keeps write permissions explicit and local.
 
 ---
 
-### Primitives
+## Quick API map
 
-#### Accessor
+### `createSvimmerStore(initial)`
+Creates the root writer handle.
 
-Reads from the current node value.
+### `read(accessor)`
+Read data from the current handle.
+
+### `focus(selector)`
+Create a child handle from the current handle.
+Returns `null` if the target does not exist.
+
+### `transact(mutator)`
+Mutate through Immer drafts on a writer handle.
+
+### `set(value)`
+Replace the current handle value.
+
+### `follow(locator)` + `locatorFor<T>()`
+Use dynamic handles that relocate when dependencies change.
+
+### `subscribe(cb)`
+Observe value updates.
+
+### `onDestroy(cb)`
+Observe lifecycle destruction when a handle path is removed.
+
+---
+
+## Value handles and `undefined`
+
+Svimmer uses value handles, even though path tracking is internal.
+
+Because of this model, Svimmer does **not** distinguish between:
+- a property that is `undefined`
+- a property that does not exist
+
+In practice, `undefined` means “deleted”.
+
+Effects:
+- Setting a field to `undefined` removes it semantically.
+- Removed paths trigger `onDestroy`.
+- Removed paths cannot be focused into.
+- `set(undefined)` is forbidden on value handles.
+
+Why this rule exists:
+- A child handle should not be able to delete itself from its parent via `set(undefined)`.
+
+Recommendation:
+- Prefer **nullable fields** (`null`) over optional fields when you want an empty value that still exists.
+
+---
+
+## Locators (dynamic handles)
+
+Locators let you define reusable dynamic handle logic.
+
+A locator is defined against a root type:
+- You declare dependency selectors.
+- You get dependency handles in `locate(...)`.
+- `locate(...)` returns the current selector (or `null`).
+
+This makes locators easy to define in external files and reuse across modules/components.
+
+### Example: external locator definition
 
 ```ts
-person.read(x => x.name)
-person.read(keyOf<Person>()("name"))
+// locators/company.ts
+import { locatorFor } from "svimmer";
+import type { CompanyDoc } from "./types";
+
+const companyLocator = locatorFor<CompanyDoc>();
+
+export const ceoLocator = companyLocator(
+  [x => x.ceoId],
+  (ceoIdRef) => {
+    const id = ceoIdRef.value();
+    return x => x.employees.get(id) ?? undefined;
+  },
+);
+
+export const betaProjectLocator = companyLocator(
+  [x => x.featureFlags.get("betaBilling")],
+  (flagRef) => {
+    const enabled = flagRef?.value() ?? false;
+    return enabled ? (x => x.projects[1]) : null;
+  },
+);
 ```
 
-#### Selector
-
-Navigates from one node to a child node.
-
-Selectors are branded accessors:
-
-* selectors work in `read`
-* only selectors work in `focus`
+### Example: using a locator
 
 ```ts
-person.focus(selector<Person>(x => x.name))
-person.focus(keyOf<Person>()("name"))
+const store = createSvimmerStore(initialCompany);
+
+const ceo = store.follow(ceoLocator);
+ceo.read(x => x?.name); // dynamic read
+
+const betaProject = store.follow(betaProjectLocator);
+betaProject.current(); // handle or null
 ```
 
-#### Transactor
-
-Mutates the current node draft.
-
-```ts
-person.transact(d => {
-  d.name = "Carl"
-})
-```
+`null` from `locate(...)` means there is currently no target.
+When dependencies change, the dynamic handle relocates automatically.
 
 ---
 
-### Focus semantics
+## Recommended component architecture
 
-`focus` is **path-based**, not object-identity-based.
+- Keep values derived from handles inside components.
+- Avoid passing raw derived values through many layers.
+- Pass handles instead of snapshots when possible.
+- Prefer passing the **lowest common parent** handle to a component.
+- Avoid passing multiple sibling handles if one parent handle is enough.
 
-A focused node survives as long as its **path still exists**.
+This keeps component boundaries clean.
+It also avoids “privileged controller components”.
 
-Replacing an object at the same path does **not** destroy the node.
-
-Example:
-
-```ts
-ceo = { name: "John" } -> { name: "Carl" }
-```
-
-* `ceo` survives
-* `ceo.name` survives
-* both are updated
-* no destroy
-
-If a path disappears, the node is destroyed.
+With root writer in `App.svelte`, permissions become simple:
+- pass reader handles for read-only areas
+- pass writer handles where mutation is allowed
 
 ---
 
-### Missing paths
-
-`focus(...)` returns `null` when the target path does not exist.
-
-Nonexistent nodes are not represented by placeholder handles.
-
-Creation happens through parent writes, not through ghost children.
-
----
-
-### Read semantics
-
-`read(accessor)` is the normal API.
-
-`read()` does not expose the full raw value.
-
-Reason:
-
-* keeps reads inside the node model
-* avoids stale raw references becoming the normal pattern
-
-A separate escape hatch like `value()` may exist later.
-
----
-
-### Transaction semantics
-
-All writes go through the root transaction boundary.
-
-A child writer does not wrap parent writers recursively.
-
-Each node resolves its own path against the current root draft.
-
-This keeps:
-
-* one real state owner
-* one history boundary
-* one patch source
-
----
-
-### Reactivity model
-
-Subscriptions are stored in a **branch trie** keyed by path.
-
-Each branch slot may hold:
-
-* subscribers
-* destroy handlers
-* cached reader
-* cached writer
-* child branch slots
-* stale flag
-
-Handles are cached per path.
-Focus returns the canonical handle for that path.
-
----
-
-### Notification model
-
-Notifications are patch-driven.
-
-Patches do **not** directly define lifecycle.
-They only identify affected subtrees.
-
-The system compares old/new values only where cached branch slots already exist.
-
-This is used to detect:
-
-#### touched
-
-A surviving path whose value changed.
-
-#### deleted root
-
-The highest cached path in a lost subtree.
-
-Deleted roots are expanded into deleted branches.
-
----
-
-### Notify order
-
-#### 1. Destroy
-
-Deleted branches are notified **bottom-up**.
-
-Each receives:
-
-* `onDestroy`
-* stale mark
-
-#### 2. Update
-
-Surviving touched branches are notified **top-down**.
-
-Subscribers receive the branch’s cached reader.
-
-#### 3. Cleanup
-
-Deleted roots are removed from the branch trie.
-
----
-
-### Destroy semantics
-
-`onDestroy(cb)` is lifecycle-only.
-
-It does **not** receive “last value”.
-
-Reason:
-
-* last value is ambiguous inside one transaction
-* path loss is the real semantic event
-
-After destroy:
-
-* the node becomes stale
-* later operations should fail
-
----
-
-### Path model
-
-Internally, nodes are rooted by path.
-
-Selectors may later compile to paths through proxy tracking.
-
-Current path steps support:
-
-* `string`
-* `number`
-* `symbol`
-
-Runtime routing uses the same path space as Immer patches.
-
----
-
-### Container model
-
-Children are recognized in:
-
-* objects
-* arrays
-* maps
-
-Sets are treated as terminal leaves.
-
-Reason:
-
-* set members do not have stable patch-addressable child identity
-
----
-
-### Generic helpers
-
-#### selectors
-
-* `keyOf<T>()("name")`
-* `atOf<T>()(0)`
-* `mapGetOf<K, V>()(key)`
-
-#### accessors
-
-* `self`
-* `lengthOf`
-* `sizeOf`
-* `isEmpty`
-* `includes`
-* `setHas`
-* `mapHas`
-* `some`
-* `every`
-
-These are convenience only.
-Inline lambdas remain first-class.
-
----
-
-### Design principles
-
-* root owns state
-* nodes are thin handles
-* path identity matters
-* reads, selectors, and transactors are explicit
-* subscriptions are centralized
-* lifecycle is path-existence-based
-* history and reactivity come from the same transaction pipeline
-
----
-
-### Non-goals for now
-
-* placeholder nodes for missing paths
-* create notifications
-* aggressive caching
-* object-identity semantics
+## Notes on `value()`
+
+`value()` can be useful for:
+- primitive reads
+- creating snapshot copies
+- serialization
+
+Using `value()` as the default read path can produce stale/weird references.
+Use `read(...)` as the normal access pattern.
