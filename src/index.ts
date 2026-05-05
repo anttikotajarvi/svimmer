@@ -30,7 +30,7 @@ import {
 import { MISSING } from "./core/util";
 import { compareBranch } from "./core/interpret-patches";
 import type { Subscriber, Unsubscriber } from "./generic";
-import { createGetOrCreateDynamicHandle, type DynamicReader, type DynamicWriter, type FollowCore, type Locator, type LocatorId } from "./core/locator";
+import { createGetOrCreateDynamicHandle, type AnyLocator, type DynamicReader, type DynamicWriter, type FollowCore, type Locator, type LocatorId } from "./core/locator";
 type Unfocus<T> = T extends FocusValue<infer V> ? V : never;
 
 /**
@@ -97,12 +97,11 @@ export interface SvimmerReader<T> {
     ? SvimmerReader<Unfocus<U>>
     : SvimmerReader<Focused<U>> | null;
 
-  follow<L extends Locator<T, any, readonly Selector<T, any>[]>>(
+  follow<L extends AnyLocator<T>>(
     locator: L,
   ): DynamicReader<L>;
 
   subscribe(run: Subscriber<SvimmerReader<T>>): Unsubscriber;
-
   onDestroy: (cb: () => void) => Unsubscriber;
 
   /**
@@ -126,12 +125,11 @@ export interface SvimmerWriter<T> extends SvimmerReader<T> {
     ? SvimmerWriter<Unfocus<U>>
     : SvimmerWriter<Focused<U>> | null;
 
-  follow<L extends Locator<T, any, readonly Selector<T, any>[]>>(
+  follow<L extends AnyLocator<T>>(
     locator: L,
   ): DynamicWriter<L>;
 
   transact<R>(fn: Transactor<T, R>): R;
-
   set(value: Exclude<T, undefined>): void;
 }
 

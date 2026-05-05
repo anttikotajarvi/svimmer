@@ -10,13 +10,22 @@ import type {
 } from "..";
 import type { Unsubscriber } from "../generic";
 
-export declare const LocatorId: unique symbol;
+export const LocatorId: unique symbol = Symbol("LocatorId");
 
 type SelectorRaw<S> =
   S extends Selector<any, infer R> ? R : never;
 
+type AnySelectorTuple<T> = readonly Selector<T, any>[];
+
+type NonEmptySelectors<T> = readonly [
+  Selector<T, any>,
+  ...Selector<T, any>[],
+];
+
 /**
  * Resolved dependency handles passed into a locator's `locate` callback.
+ *
+ * Dependencies are always readers, even when `follow(...)` is used from a writer.
  */
 export type LocatedDeps<
   T,
@@ -28,6 +37,19 @@ export type LocatedDeps<
       : never
 };
 
+/**
+ * A locator is a pure, reusable dynamic-reference recipe.
+ *
+ * - `deps` are static selectors from the local root
+ * - `locate(...)` receives the current resolved dependency handles
+ * - `locate(...)` returns a selector for the local root, or null
+ *
+ * Important:
+ * `R` is the raw selector return type, not the final focused value type.
+ * Examples:
+ * - `x => x.office`                => R = FocusProxy<Office>
+ * - `x => x.users.get("john")`     => R = FocusProxy<User | undefined>
+ */
 export interface Locator<
   T,
   R,
@@ -38,20 +60,38 @@ export interface Locator<
   readonly locate: (...deps: LocatedDeps<T, Ds>) => Selector<T, R> | null;
 }
 
+export type AnyLocator<T> = {
+  readonly [LocatorId]: symbol;
+  readonly deps: readonly [Selector<T, any>, ...Selector<T, any>[]];
+  readonly locate: (...deps: any[]) => Selector<T, any> | null;
+};
 
-export function createLocator<
-  T,
-  const Ds extends readonly Selector<T, any>[] = readonly Selector<T, any>[],
-  S extends Selector<T, any> = Selector<T, any>,
->(
-  deps: Ds,
-  locate: (...deps: LocatedDeps<T, Ds>) => S | null,
-): Locator<T, SelectorRaw<S>, Ds> {
-  return {
+
+/**
+ * Create a pure locator with a hidden stable identity.
+ *
+ * Locators must have at least one dependency.
+ *
+ * Usage:
+ * ```ts
+ * const locator = locatorFor<Root>()(
+ *   [x => x.someId],
+ *   (someIdRef) => x => x.items.get(someIdRef.value()),
+ * );
+ * ```
+ */
+export function locatorFor<T>() {
+  return <
+    const Ds extends NonEmptySelectors<T>,
+    const S extends Selector<T, any>,
+  >(
+    deps: readonly [...Ds],
+    locate: (...deps: LocatedDeps<T, Ds>) => S | null,
+  ): Locator<T, SelectorRaw<S>, Ds> => ({
     [LocatorId]: Symbol("locator"),
-    deps,
+    deps: deps as Ds,
     locate,
-  };
+  });
 }
 
 type LocatorFn<L> =
@@ -351,40 +391,4 @@ export function createGetOrCreateDynamicHandle(
 
     return core.writer.handle!;
   };
-}
-
-const dynamicHandleCache = new Map<symbol, FollowCore>();
-const getOrCreateDynamicHandle = createGetOrCreateDynamicHandle(dynamicHandleCache);
-
-export function follow<
-  T,
-  L extends Locator<T, any, AnySelectorTuple<T>>,
->(
-  root: SvimmerReader<T>,
-  locator: L,
-): DynamicReader<L>;
-
-export function follow<
-  T,
-  L extends Locator<T, any, AnySelectorTuple<T>>,
->(
-  root: SvimmerWriter<T>,
-  locator: L,
-): DynamicWriter<L>;
-
-export function follow<
-  T,
-  L extends Locator<T, any, AnySelectorTuple<T>>,
->(
-  root: SvimmerReader<T> | SvimmerWriter<T>,
-  locator: L,
-): DynamicReader<L> | DynamicWriter<L> {
-  const handle = getOrCreateDynamicHandle(
-    locator,
-    () => root as SvimmerReader<unknown>,
-    () => root as SvimmerWriter<unknown>,
-    "transact" in root ? "writer" : "reader",
-  );
-
-  return handle as DynamicReader<L> | DynamicWriter<L>;
 }

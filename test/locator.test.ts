@@ -1,112 +1,124 @@
 import { describe, it, expect, vi, expectTypeOf } from "vitest";
 import {
   createSvimmerStore,
-  type Selector,
   type SvimmerReader,
   type SvimmerWriter,
 } from "../src";
 import type { CompanyDoc, Employee, Project } from "./assets/company";
 import { companyFixture } from "./assets/company";
-import { createLocator } from "../src/core/locator";
-import type { FocusProxy } from "../src/core/tracker";
+import { locatorFor } from "../src/core/locator";
 
 function makeStore(): SvimmerWriter<CompanyDoc> {
   return createSvimmerStore<CompanyDoc>(structuredClone(companyFixture));
 }
 
-describe("Svimmer locator / follow integration", () => {
-  it("infers a non-null current() for a total locator with a definite target", () => {
+const companyLocator = locatorFor<CompanyDoc>();
+const employeeMapLocator = locatorFor<CompanyDoc["employees"]>();
+
+describe("Svimmer locators / follow", () => {
+  it("supports a total locator with a definite target", () => {
     const store = makeStore();
 
-  const officeLocator = createLocator(
-    [] as const,
-    () => (x: FocusProxy<CompanyDoc>) => x.office,
-  );
+    const officeLocator = companyLocator(
+      [x => x.companyName],
+      (_companyNameRef) => {
+        return x => x.office;
+      },
+    );
+
     const office = store.follow(officeLocator);
-  office.current()
-    expectTypeOf(office.current()).toEqualTypeOf<SvimmerWriter<CompanyDoc["office"]>>();
-    expect(office.current().read((x) => x.city)).toBe("Oulu");
-    expect(office.read((x) => x.rooms.length)).toBe(3);
+
+    expectTypeOf(office.current()).toEqualTypeOf<
+      SvimmerWriter<CompanyDoc["office"]>
+    >();
+
+    expect(office.current().read(x => x.city)).toBe("Oulu");
+    expect(office.read(x => x.rooms.length)).toBe(3);
   });
 
-  it("infers nullable current() for a total locator whose selector targets T | undefined", () => {
+  it("supports a total locator whose selector targets T | undefined", () => {
     const store = makeStore();
 
-    const ceoLocator = createLocator<CompanyDoc>(
-      [((x) => x.ceoId)],
+    const ceoLocator = companyLocator(
+      [x => x.ceoId],
       (ceoIdRef) => {
         const id = ceoIdRef.value();
-        return (x) => x.employees.get(id);
+        return x => x.employees.get(id);
       },
     );
 
     const ceo = store.follow(ceoLocator);
 
-    expectTypeOf(ceo.current()).toEqualTypeOf<SvimmerWriter<Employee> | null>();
+    expectTypeOf(ceo.current()).toEqualTypeOf<
+      SvimmerWriter<Employee> | null
+    >();
+
     expect(ceo.current()).not.toBeNull();
-    expect(ceo.current()!.read((x) => x.name)).toBe("Alice North");
+    expect(ceo.current()!.read(x => x.name)).toBe("Alice North");
+    expect(ceo.read(x => x.title)).toBe("CEO");
   });
 
-  it("returns null from current() and read() when the locator currently resolves to no target", () => {
+  it("can currently resolve to null based on dependency values", () => {
     const store = makeStore();
 
-    const deps = [((x) => x.featureFlags.get("betaBilling")) as Selector<CompanyDoc, boolean | undefined>] as const;
-    const betaProjectLocator = createLocator(
-      deps,
+    const betaProjectLocator = companyLocator(
+      [x => x.featureFlags.get("betaBilling")],
       (flagRef) => {
         const enabled = flagRef?.value() ?? false;
-        return enabled ? ((x: any) => x.projects[1]) : null;
+        return enabled ? (x => x.projects[1]) : null;
       },
     );
 
     const project = store.follow(betaProjectLocator);
 
+    expectTypeOf(project.current()).toEqualTypeOf<
+      SvimmerWriter<Project> | null
+    >();
+
     expect(project.current()).toBeNull();
-    expect(project.read((x) => x.name)).toBeNull();
+    expect(project.read(x => x.name)).toBeNull();
 
     store.transact((draft) => {
       draft.featureFlags.set("betaBilling", true);
     });
 
     expect(project.current()).not.toBeNull();
-    expect(project.current()!.read((x) => x.name)).toBe("Juniper");
-    expect(project.read((x) => x.budget)).toBe(12_000);
+    expect(project.current()!.read(x => x.name)).toBe("Juniper");
+    expect(project.read(x => x.budget)).toBe(12_000);
   });
 
   it("relocates when a dependency changes", () => {
     const store = makeStore();
 
-    const deps = [((x) => x.ceoId) as Selector<CompanyDoc, string>] as const;
-    const ceoLocator = createLocator(
-      deps,
+    const ceoLocator = companyLocator(
+      [x => x.ceoId],
       (ceoIdRef) => {
         const id = ceoIdRef.value();
-        return (x: any) => x.employees.get(id);
+        return x => x.employees.get(id);
       },
     );
 
     const ceo = store.follow(ceoLocator);
 
-    expect(ceo.current()!.read((x) => x.name)).toBe("Alice North");
+    expect(ceo.current()!.read(x => x.name)).toBe("Alice North");
 
     store.transact((draft) => {
       draft.ceoId = "e2";
     });
 
     expect(ceo.current()).not.toBeNull();
-    expect(ceo.current()!.read((x) => x.name)).toBe("Bob Stone");
-    expect(ceo.read((x) => x.age)).toBe(31);
+    expect(ceo.current()!.read(x => x.name)).toBe("Bob Stone");
+    expect(ceo.read(x => x.age)).toBe(31);
   });
 
   it("forwards notifications from the current target and rewires away from the old one after relocation", () => {
     const store = makeStore();
 
-    const deps = [((x) => x.ceoId) as Selector<CompanyDoc, string>] as const;
-    const ceoLocator = createLocator(
-      deps,
+    const ceoLocator = companyLocator(
+      [x => x.ceoId],
       (ceoIdRef) => {
         const id = ceoIdRef.value();
-        return (x: any) => x.employees.get(id);
+        return x => x.employees.get(id);
       },
     );
 
@@ -114,7 +126,7 @@ describe("Svimmer locator / follow integration", () => {
     const seen: string[] = [];
 
     ceo.subscribe((node) => {
-      seen.push(node ? node.read((x) => x.name) : "null");
+      seen.push(node ? node.read(x => x.name) : "null");
     });
 
     expect(seen).toEqual(["Alice North"]);
@@ -147,12 +159,11 @@ describe("Svimmer locator / follow integration", () => {
   it("becomes null when the current target disappears and can later relocate to a new target", () => {
     const store = makeStore();
 
-    const deps = [((x) => x.ceoId) as Selector<CompanyDoc, string>] as const;
-    const ceoLocator = createLocator(
-      deps,
+    const ceoLocator = companyLocator(
+      [x => x.ceoId],
       (ceoIdRef) => {
         const id = ceoIdRef.value();
-        return (x: any) => x.employees.get(id);
+        return x => x.employees.get(id);
       },
     );
 
@@ -160,11 +171,11 @@ describe("Svimmer locator / follow integration", () => {
     const seen: string[] = [];
 
     ceo.subscribe((node) => {
-      seen.push(node ? node.read((x) => x.name) : "null");
+      seen.push(node ? node.read(x => x.name) : "null");
     });
 
-    expect(ceo.current()).not.toBeNull();
     expect(seen).toEqual(["Alice North"]);
+    expect(ceo.current()).not.toBeNull();
 
     store.transact((draft) => {
       draft.employees.delete("e1");
@@ -178,78 +189,103 @@ describe("Svimmer locator / follow integration", () => {
     });
 
     expect(ceo.current()).not.toBeNull();
-    expect(ceo.current()!.read((x) => x.name)).toBe("Bob Stone");
+    expect(ceo.current()!.read(x => x.name)).toBe("Bob Stone");
     expect(seen).toEqual(["Alice North", "null", "Bob Stone"]);
   });
 
   it("works from a local non-root handle as the locator root", () => {
     const store = makeStore();
-    const employees = store.focus((x) => x.employees)!;
+    const employees = store.focus(x => x.employees)!;
 
-    const deps = [] as const satisfies readonly Selector<CompanyDoc["employees"], any>[];
-    const localEmployeeLocator = createLocator(
-      deps,
-      () => (x) => x.get("e2"),
+    const bobLocator = employeeMapLocator(
+      [x => x.get("e2")],
+      (_bobRef) => {
+        return x => x.get("e2");
+      },
     );
 
-    const bob = employees.follow(localEmployeeLocator);
+    const bob = employees.follow(bobLocator);
+
+    expectTypeOf(bob.current()).toEqualTypeOf<
+      SvimmerWriter<Employee> | null
+    >();
 
     expect(bob.current()).not.toBeNull();
-    expect(bob.current()!.read((x) => x.name)).toBe("Bob Stone");
+    expect(bob.current()!.read(x => x.name)).toBe("Bob Stone");
 
     store.transact((draft) => {
       draft.employees.get("e2")!.title = "Principal Engineer";
     });
 
-    expect(bob.read((x) => x.title)).toBe("Principal Engineer");
+    expect(bob.read(x => x.title)).toBe("Principal Engineer");
   });
 
   it("exposes writer capability when followed from a writer root", () => {
     const store = makeStore();
 
-    const deps = [((x) => x.ceoId) as Selector<CompanyDoc, string>] as const;
-    const ceoLocator = createLocator(
-      deps,
+    const ceoLocator = companyLocator(
+      [x => x.ceoId],
       (ceoIdRef) => {
         const id = ceoIdRef.value();
-        return (x: any) => x.employees.get(id);
+        return x => x.employees.get(id);
       },
     );
 
     const ceo = store.follow(ceoLocator);
 
-    expectTypeOf(ceo.current()).toEqualTypeOf<SvimmerWriter<Employee> | null>();
+    expectTypeOf(ceo.current()).toEqualTypeOf<
+      SvimmerWriter<Employee> | null
+    >();
 
-    ceo.transact((draft) => {
+    const nextAge = ceo.transact((draft) => {
       draft.age += 8;
       return draft.age;
     });
 
-    expect(store.read((x) => x.employees.get("e1")!.age)).toBe(50);
-    expect(ceo.read((x) => x.age)).toBe(50);
+    expect(nextAge).toBe(50);
+    expect(store.read(x => x.employees.get("e1")!.age)).toBe(50);
+    expect(ceo.read(x => x.age)).toBe(50);
+  });
+
+  it("supports read-only follow from a reader root", () => {
+    const store = makeStore();
+    const readerRoot: SvimmerReader<CompanyDoc> = store;
+
+    const ceoLocator = companyLocator(
+      [x => x.ceoId],
+      (ceoIdRef) => {
+        const id = ceoIdRef.value();
+        return x => x.employees.get(id);
+      },
+    );
+
+    const ceo = readerRoot.follow(ceoLocator);
+
+    expectTypeOf(ceo.current()).toEqualTypeOf<
+      SvimmerReader<Employee> | null
+    >();
+
+    expect(ceo.current()).not.toBeNull();
+    expect(ceo.current()!.read(x => x.name)).toBe("Alice North");
+    expect(ceo.read(x => x.age)).toBe(42);
   });
 
   it("does not duplicate relocation work when multiple dependencies fire in one transaction", () => {
     const store = makeStore();
 
-    const deps = [
-      ((x) => x.ceoId) as Selector<CompanyDoc, string>,
-      ((x) => x.companyName) as Selector<CompanyDoc, string>,
-    ] as const;
-
-    const locator = createLocator(
-      deps,
+    const ceoLocator = companyLocator(
+      [x => x.ceoId, x => x.companyName],
       (ceoIdRef) => {
         const id = ceoIdRef.value();
-        return (x: any) => x.employees.get(id);
+        return x => x.employees.get(id);
       },
     );
 
-    const dynamic = store.follow(locator);
+    const dynamic = store.follow(ceoLocator);
     const seen: string[] = [];
 
     dynamic.subscribe((node) => {
-      seen.push(node ? node.read((x) => x.name) : "null");
+      seen.push(node ? node.read(x => x.name) : "null");
     });
 
     expect(seen).toEqual(["Alice North"]);
@@ -260,5 +296,33 @@ describe("Svimmer locator / follow integration", () => {
     });
 
     expect(seen).toEqual(["Alice North", "Bob Stone"]);
+  });
+
+  it("preserves null as a real value through follow", () => {
+    const store = makeStore();
+
+    const selectedProjectNameLocator = companyLocator(
+      [x => x.featureFlags.get("betaBilling")],
+      (flagRef) => {
+        const enabled = flagRef?.value() ?? false;
+        return enabled
+          ? (x => x.aliases.mainProject)
+          : (_x) => null as null;
+      },
+    );
+
+    const dynamic = store.follow(selectedProjectNameLocator);
+
+    expectTypeOf(dynamic.current()).toEqualTypeOf<
+      SvimmerWriter<string | null>
+    >();
+
+    expect(dynamic.read(x => x)).toBeNull();
+
+    store.transact((draft) => {
+      draft.featureFlags.set("betaBilling", true);
+    });
+
+    expect(dynamic.read(x => x)).toBe("Mercury");
   });
 });
