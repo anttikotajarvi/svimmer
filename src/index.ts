@@ -30,6 +30,7 @@ import {
 import { MISSING } from "./core/util";
 import { compareBranch } from "./core/interpret-patches";
 import type { Subscriber, Unsubscriber } from "./generic";
+import { createGetOrCreateDynamicHandle, type AnyLocator, type DynamicReader, type DynamicWriter, type FollowCore, type Locator, type LocatorId } from "./core/locator";
 type Unfocus<T> = T extends FocusValue<infer V> ? V : never;
 
 /**
@@ -89,13 +90,20 @@ export type FocusWriterReturn<U> = [Extract<Unfocus<U>, undefined>] extends [nev
 
 export interface SvimmerReader<T> {
   read<U>(accessor: Accessor<T, U>): U;
+
   focus<U>(
     selector: Selector<T, U>,
   ): [Extract<Unfocus<U>, undefined>] extends [never]
     ? SvimmerReader<Unfocus<U>>
     : SvimmerReader<Focused<U>> | null;
-  subscribe(run: (node: SvimmerReader<T>) => void): Unsubscriber;
+
+  follow<L extends AnyLocator<T>>(
+    locator: L,
+  ): DynamicReader<L>;
+
+  subscribe(run: Subscriber<SvimmerReader<T>>): Unsubscriber;
   onDestroy: (cb: () => void) => Unsubscriber;
+
   /**
    * This will allow you to shoot yourself in the foot with:
    * - Stale references
@@ -116,6 +124,11 @@ export interface SvimmerWriter<T> extends SvimmerReader<T> {
   ): [Extract<Unfocus<U>, undefined>] extends [never]
     ? SvimmerWriter<Unfocus<U>>
     : SvimmerWriter<Focused<U>> | null;
+
+  follow<L extends AnyLocator<T>>(
+    locator: L,
+  ): DynamicWriter<L>;
+
   transact<R>(fn: Transactor<T, R>): R;
   set(value: Exclude<T, undefined>): void;
 }
@@ -136,6 +149,9 @@ export function createSvimmerStore<T>(initial: T) {
   let txId = 0;
 
   const branches = createBranchSlot(null, null);
+
+  const followCache = new Map<typeof LocatorId, FollowCore>();
+  const getOrCreateDynamicHandle = createGetOrCreateDynamicHandle(followCache);
 
   // Value is 'depth' which used to determine update order.
   const touched = new Map<BranchSlot, number>();
@@ -308,61 +324,87 @@ export function createSvimmerStore<T>(initial: T) {
     };
   }
 
-  function getOrCreateWriter<T>(path: Path): SvimmerWriter<T> {
-    const branch = ensureBranch(branches, path);
-    if (branch.writer) return branch.writer as SvimmerWriter<T>;
+function getOrCreateWriter<T>(path: Path): SvimmerWriter<T> {
+  const branch = ensureBranch(branches, path);
+  if (branch.writer) return branch.writer as SvimmerWriter<T>;
 
-    const ctx = getCtx<T>(path);
+  const ctx = getCtx<T>(path);
 
-    const focus = <U>(selector: Selector<T, U>): FocusWriterReturn<U> => {
-      const subPath = resolveFocusPath(ctx, selector);
-      if (!subPath) return null as FocusWriterReturn<U>;
+  const focus = <U>(selector: Selector<T, U>): FocusWriterReturn<U> => {
+    const subPath = resolveFocusPath(ctx, selector);
+    if (!subPath) return null as FocusWriterReturn<U>;
 
-      return getOrCreateWriter<Focused<U>>([
-        ...path,
-        ...subPath,
-      ]) as FocusWriterReturn<U>;
-    };
+    return getOrCreateWriter<Focused<U>>([
+      ...path,
+      ...subPath,
+    ]) as FocusWriterReturn<U>;
+  };
 
-    branch.writer = {
-      transact: ctx.transact,
-      read: makeRead(ctx),
-      focus,
-      subscribe: ctx.subscribe,
-      onDestroy: ctx.onDestroy,
-      value: ctx.getData,
-      set: ctx.setData,
-    };
+  const follow: SvimmerWriter<T>["follow"] = <L extends Locator<T, any, readonly Selector<T, any>[]>>(locator: L) => {
+    const getReader = () => getOrCreateReader(path) as SvimmerReader<unknown>;
+    const getWriter = () => getOrCreateWriter(path) as SvimmerWriter<unknown>;
 
-    return branch.writer as SvimmerWriter<T>;
-  }
+    return getOrCreateDynamicHandle(
+      locator as Locator<any, any, any>,
+      getReader,
+      getWriter,
+      "writer",
+    ) as DynamicWriter<L>;
+  };
 
-  function getOrCreateReader<T>(path: Path): SvimmerReader<T> {
-    const branch = ensureBranch(branches, path);
-    if (branch.reader) return branch.reader as SvimmerReader<T>;
+  branch.writer = {
+    transact: ctx.transact,
+    read: makeRead(ctx),
+    focus,
+    follow,
+    subscribe: ctx.subscribe,
+    onDestroy: ctx.onDestroy,
+    value: ctx.getData,
+    set: ctx.setData,
+  };
 
-    const ctx = getCtx<T>(path);
+  return branch.writer as SvimmerWriter<T>;
+}
 
-    const focus = <U>(selector: Selector<T, U>): FocusReaderReturn<U> => {
-      const subPath = resolveFocusPath(ctx, selector);
-      if (!subPath) return null as FocusReaderReturn<U>;
+function getOrCreateReader<T>(path: Path): SvimmerReader<T> {
+  const branch = ensureBranch(branches, path);
+  if (branch.reader) return branch.reader as SvimmerReader<T>;
 
-      return getOrCreateReader<Focused<U>>([
-        ...path,
-        ...subPath,
-      ]) as FocusReaderReturn<U>;
-    };
+  const ctx = getCtx<T>(path);
 
-    branch.reader = {
-      read: makeRead(ctx),
-      focus,
-      subscribe: ctx.subscribe,
-      onDestroy: ctx.onDestroy,
-      value: ctx.getData,
-    };
+  const focus = <U>(selector: Selector<T, U>): FocusReaderReturn<U> => {
+    const subPath = resolveFocusPath(ctx, selector);
+    if (!subPath) return null as FocusReaderReturn<U>;
 
-    return branch.reader as SvimmerReader<T>;
-  }
+    return getOrCreateReader<Focused<U>>([
+      ...path,
+      ...subPath,
+    ]) as FocusReaderReturn<U>;
+  };
+
+  const follow: SvimmerReader<T>["follow"] = <L extends Locator<T, any, readonly Selector<T, any>[]>>(locator: L) => {
+    const getReader = () => getOrCreateReader(path) as SvimmerReader<unknown>;
+    const getWriter = () => getOrCreateWriter(path) as SvimmerWriter<unknown>;
+
+    return getOrCreateDynamicHandle(
+      locator as Locator<any, any, any>,
+      getReader,
+      getWriter,
+      "reader",
+    ) as DynamicReader<L>;
+  };
+
+  branch.reader = {
+    read: makeRead(ctx),
+    focus,
+    follow,
+    subscribe: ctx.subscribe,
+    onDestroy: ctx.onDestroy,
+    value: ctx.getData,
+  };
+
+  return branch.reader as SvimmerReader<T>;
+}
 
   return getOrCreateWriter<T>([]);
 }
