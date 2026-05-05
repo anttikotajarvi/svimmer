@@ -12,9 +12,6 @@ import type { Unsubscriber } from "../generic";
 
 export const LocatorId: unique symbol = Symbol("LocatorId");
 
-type SelectorRaw<S> =
-  S extends Selector<any, infer R> ? R : never;
-
 type AnySelectorTuple<T> = readonly Selector<T, any>[];
 
 type NonEmptySelectors<T> = readonly [
@@ -54,10 +51,13 @@ export interface Locator<
   T,
   R,
   Ds extends readonly Selector<T, any>[] = readonly Selector<T, any>[],
+  CanBeMissing extends boolean = boolean,
 > {
   readonly [LocatorId]: symbol;
   readonly deps: Ds;
-  readonly locate: (...deps: LocatedDeps<T, Ds>) => Selector<T, R> | null;
+  readonly locate: (...deps: LocatedDeps<T, Ds>) => CanBeMissing extends true
+    ? Selector<T, R> | null
+    : Selector<T, R>;
 }
 
 export type AnyLocator<T> = {
@@ -81,17 +81,32 @@ export type AnyLocator<T> = {
  * ```
  */
 export function locatorFor<T>() {
-  return <
+  function build<
     const Ds extends NonEmptySelectors<T>,
-    const S extends Selector<T, any>,
+    U,
   >(
     deps: readonly [...Ds],
-    locate: (...deps: LocatedDeps<T, Ds>) => S | null,
-  ): Locator<T, SelectorRaw<S>, Ds> => ({
-    [LocatorId]: Symbol("locator"),
-    deps: deps as Ds,
-    locate,
-  });
+    locate: (...deps: LocatedDeps<T, Ds>) => Selector<T, U>,
+  ): Locator<T, U, Ds, false>;
+  function build<
+    const Ds extends NonEmptySelectors<T>,
+    U,
+  >(
+    deps: readonly [...Ds],
+    locate: (...deps: LocatedDeps<T, Ds>) => Selector<T, U> | null,
+  ): Locator<T, U, Ds, true>;
+  function build(
+    deps: readonly Selector<T, any>[],
+    locate: (...deps: any[]) => Selector<T, any> | null,
+  ) {
+    return {
+      [LocatorId]: Symbol("locator"),
+      deps,
+      locate,
+    };
+  }
+
+  return build;
 }
 
 type LocatorFn<L> =
@@ -101,6 +116,8 @@ type LocatorFn<L> =
 
 type LocatorReturn<L> = ReturnType<LocatorFn<L>>;
 type LocatorSelector<L> = Exclude<LocatorReturn<L>, null>;
+type LocatorCanBeMissing<L> =
+  L extends Locator<any, any, any, infer N> ? N : true;
 
 /**
  * Final dynamic value type.
@@ -113,7 +130,7 @@ export type DynamicValue<L> =
     : never;
 
 export type DynamicCurrentReaderResult<L> =
-  null extends LocatorReturn<L>
+  true extends LocatorCanBeMissing<L>
     ? (
         LocatorSelector<L> extends Selector<any, infer U>
           ? FocusReaderReturn<U>
@@ -126,7 +143,7 @@ export type DynamicCurrentReaderResult<L> =
       );
 
 export type DynamicCurrentWriterResult<L> =
-  null extends LocatorReturn<L>
+  true extends LocatorCanBeMissing<L>
     ? (
         LocatorSelector<L> extends Selector<any, infer U>
           ? FocusWriterReturn<U>
@@ -140,19 +157,23 @@ export type DynamicCurrentWriterResult<L> =
 
 export type DynamicReadResult<L, U> =
   null extends DynamicCurrentReaderResult<L> ? U | null : U;
+export type DynamicInput<L> =
+  null extends DynamicCurrentReaderResult<L> ? DynamicValue<L> | undefined : DynamicValue<L>;
+export type DynamicWriteResult<L, R> =
+  null extends DynamicCurrentWriterResult<L> ? R | undefined : R;
 
 export interface DynamicReader<L extends Locator<any, any, any>> {
   current(): DynamicCurrentReaderResult<L>;
-  read<U>(accessor: Accessor<DynamicValue<L>, U>): DynamicReadResult<L, U>;
-  subscribe(run: (node: DynamicCurrentReaderResult<L>) => void): Unsubscriber;
+  read<U>(accessor: Accessor<DynamicInput<L>, U>): U;
+  subscribe(run: (node: DynamicCurrentReaderResult<L>, txId: number | null) => void): Unsubscriber;
 }
 
 export interface DynamicWriter<L extends Locator<any, any, any>>
   extends DynamicReader<L> {
   current(): DynamicCurrentWriterResult<L>;
-  subscribe(run: (node: DynamicCurrentWriterResult<L>) => void): Unsubscriber;
-  transact<R>(fn: Transactor<DynamicValue<L>, R>): DynamicReadResult<L, R>;
-  set(value: Exclude<DynamicValue<L>, undefined>): DynamicReadResult<L, void>;
+  subscribe(run: (node: DynamicCurrentWriterResult<L>, txId: number | null) => void): Unsubscriber;
+  transact<R>(fn: Transactor<DynamicInput<L>, R>): DynamicWriteResult<L, R>;
+  set(value: Exclude<DynamicValue<L>, undefined>): DynamicWriteResult<L, void>;
 }
 
 /**
@@ -177,13 +198,13 @@ export type FollowCore = {
 
   reader: {
     current: SvimmerReader<unknown> | null;
-    subs: Set<(node: SvimmerReader<unknown> | null) => void>;
+    subs: Set<(node: SvimmerReader<unknown> | null, txId: number | null) => void>;
     handle: DynamicReader<any> | null;
   } | null;
 
   writer: {
     current: SvimmerWriter<unknown> | null;
-    subs: Set<(node: SvimmerWriter<unknown> | null) => void>;
+    subs: Set<(node: SvimmerWriter<unknown> | null, txId: number | null) => void>;
     handle: DynamicWriter<any> | null;
   } | null;
 };
@@ -214,16 +235,16 @@ function unsubscribeCurrent(core: FollowCore) {
   }
 }
 
-function notify(core: FollowCore) {
+function notify(core: FollowCore, txId: number | null = core.lastTxId) {
   if (core.reader) {
     for (const sub of Array.from(core.reader.subs)) {
-      sub(core.reader.current);
+      sub(core.reader.current, txId);
     }
   }
 
   if (core.writer) {
     for (const sub of Array.from(core.writer.subs)) {
-      sub(core.writer.current);
+      sub(core.writer.current, txId);
     }
   }
 }
@@ -234,7 +255,12 @@ function wireCurrent(core: FollowCore) {
   const current = core.currentTargetReader;
   if (!current) return;
 
+  let initial = true;
   const unsubData = current.subscribe(() => {
+    if (initial) {
+      initial = false;
+      return;
+    }
     syncCurrentCaches(core);
     notify(core);
   });
@@ -332,13 +358,13 @@ export function createGetOrCreateDynamicHandle(
 
           read: (accessor) => {
             const cur = core!.reader!.current;
-            return cur ? cur.read(accessor as any) : null;
+            return cur ? cur.read(accessor as any) : (accessor as any)(undefined);
           },
 
           subscribe: (run) => {
-            const wrapped = run as (node: SvimmerReader<unknown> | null) => void;
+            const wrapped = run as (node: SvimmerReader<unknown> | null, txId: number | null) => void;
             core!.reader!.subs.add(wrapped);
-            run(core!.reader!.current as any);
+            run(core!.reader!.current as any, core!.lastTxId);
 
             return () => {
               core!.reader!.subs.delete(wrapped);
@@ -362,13 +388,13 @@ export function createGetOrCreateDynamicHandle(
 
         read: (accessor) => {
           const cur = core!.writer!.current;
-          return cur ? cur.read(accessor as any) : null;
+          return cur ? cur.read(accessor as any) : (accessor as any)(undefined);
         },
 
         subscribe: (run) => {
-          const wrapped = run as (node: SvimmerWriter<unknown> | null) => void;
+          const wrapped = run as (node: SvimmerWriter<unknown> | null, txId: number | null) => void;
           core!.writer!.subs.add(wrapped);
-          run(core!.writer!.current as any);
+          run(core!.writer!.current as any, core!.lastTxId);
 
           return () => {
             core!.writer!.subs.delete(wrapped);
@@ -377,12 +403,12 @@ export function createGetOrCreateDynamicHandle(
 
         transact: (fn) => {
           const cur = core!.writer!.current;
-          return cur ? cur.transact(fn as any) : null;
+          return cur ? cur.transact(fn as any) : undefined;
         },
 
         set: (value) => {
           const cur = core!.writer!.current;
-          if (!cur) return null;
+          if (!cur) return undefined;
           cur.set(value as any);
           return undefined;
         },

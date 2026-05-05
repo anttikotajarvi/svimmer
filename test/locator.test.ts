@@ -55,7 +55,7 @@ describe("Svimmer locators / follow", () => {
 
     expect(ceo.current()).not.toBeNull();
     expect(ceo.current()!.read(x => x.name)).toBe("Alice North");
-    expect(ceo.read(x => x.title)).toBe("CEO");
+    expect(ceo.read(x => x!.title)).toBe("CEO");
   });
 
   it("can currently resolve to null based on dependency values", () => {
@@ -76,7 +76,7 @@ describe("Svimmer locators / follow", () => {
     >();
 
     expect(project.current()).toBeNull();
-    expect(project.read(x => x.name)).toBeNull();
+    expect(project.read(x => x?.name)).toBeUndefined();
 
     store.transact((draft) => {
       draft.featureFlags.set("betaBilling", true);
@@ -84,7 +84,7 @@ describe("Svimmer locators / follow", () => {
 
     expect(project.current()).not.toBeNull();
     expect(project.current()!.read(x => x.name)).toBe("Juniper");
-    expect(project.read(x => x.budget)).toBe(12_000);
+    expect(project.read(x => x!.budget)).toBe(12_000);
   });
 
   it("relocates when a dependency changes", () => {
@@ -108,7 +108,7 @@ describe("Svimmer locators / follow", () => {
 
     expect(ceo.current()).not.toBeNull();
     expect(ceo.current()!.read(x => x.name)).toBe("Bob Stone");
-    expect(ceo.read(x => x.age)).toBe(31);
+    expect(ceo.read(x => x!.age)).toBe(31);
   });
 
   it("forwards notifications from the current target and rewires away from the old one after relocation", () => {
@@ -217,7 +217,7 @@ describe("Svimmer locators / follow", () => {
       draft.employees.get("e2")!.title = "Principal Engineer";
     });
 
-    expect(bob.read(x => x.title)).toBe("Principal Engineer");
+    expect(bob.read(x => x!.title)).toBe("Principal Engineer");
   });
 
   it("exposes writer capability when followed from a writer root", () => {
@@ -238,13 +238,37 @@ describe("Svimmer locators / follow", () => {
     >();
 
     const nextAge = ceo.transact((draft) => {
-      draft.age += 8;
-      return draft.age;
+      draft!.age += 8;
+      return draft!.age;
     });
 
     expect(nextAge).toBe(50);
     expect(store.read(x => x.employees.get("e1")!.age)).toBe(50);
-    expect(ceo.read(x => x.age)).toBe(50);
+    expect(ceo.read(x => x!.age)).toBe(50);
+  });
+
+  it("requires undefined-aware accessors/transactors for nullable dynamics", () => {
+    const store = makeStore();
+
+    const ceoLocator = companyLocator(
+      [x => x.ceoId],
+      (ceoIdRef) => {
+        const id = ceoIdRef.value();
+        return x => x.employees.get(id);
+      },
+    );
+
+    const ceo = store.follow(ceoLocator);
+
+    expectTypeOf(ceo.read(x => x?.name)).toEqualTypeOf<string | undefined>();
+
+    expectTypeOf(
+      ceo.transact((draft) => {
+        if (!draft) return "missing" as const;
+        draft.age += 1;
+        return draft.age;
+      }),
+    ).toEqualTypeOf<number | "missing" | undefined>();
   });
 
   it("supports read-only follow from a reader root", () => {
@@ -267,7 +291,7 @@ describe("Svimmer locators / follow", () => {
 
     expect(ceo.current()).not.toBeNull();
     expect(ceo.current()!.read(x => x.name)).toBe("Alice North");
-    expect(ceo.read(x => x.age)).toBe(42);
+    expect(ceo.read(x => x!.age)).toBe(42);
   });
 
   it("does not duplicate relocation work when multiple dependencies fire in one transaction", () => {
@@ -298,7 +322,7 @@ describe("Svimmer locators / follow", () => {
     expect(seen).toEqual(["Alice North", "Bob Stone"]);
   });
 
-  it("preserves null as a real value through follow", () => {
+  it("uses locate=null to represent an unresolved dynamic target", () => {
     const store = makeStore();
 
     const selectedProjectNameLocator = companyLocator(
@@ -307,22 +331,19 @@ describe("Svimmer locators / follow", () => {
         const enabled = flagRef?.value() ?? false;
         return enabled
           ? (x => x.aliases.mainProject)
-          : (_x) => null as null;
+          : null;
       },
     );
 
     const dynamic = store.follow(selectedProjectNameLocator);
 
-    expectTypeOf(dynamic.current()).toEqualTypeOf<
-      SvimmerWriter<string | null>
-    >();
-
-    expect(dynamic.read(x => x)).toBeNull();
+    expect(dynamic.current()).toBeNull();
+    expect(dynamic.read(x => x ?? null)).toBeNull();
 
     store.transact((draft) => {
       draft.featureFlags.set("betaBilling", true);
     });
 
-    expect(dynamic.read(x => x)).toBe("Mercury");
+    expect(dynamic.read(x => x ?? null)).toBe("Mercury");
   });
 });
